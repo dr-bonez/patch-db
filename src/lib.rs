@@ -39,6 +39,8 @@ pub enum Error {
     Join(#[from] tokio::task::JoinError),
     #[error("FD Lock Error: {0}")]
     FDLock(#[from] fd_lock_rs::Error),
+    #[error("Database Cache Corrupted: {0}")]
+    CacheCorrupted(Arc<IOError>),
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
@@ -52,6 +54,7 @@ pub struct DiffPatch(Patch);
 
 pub struct Store {
     file: FdLock<File>,
+    cache_corrupted: Option<Arc<IOError>>,
     data: Value,
     revision: u64,
 }
@@ -95,11 +98,27 @@ impl Store {
 
             Ok::<_, Error>(Store {
                 file: f.map(File::from_std),
+                cache_corrupted: None,
                 data,
                 revision,
             })
         })
         .await??)
+    }
+    fn check_cache_corrupted(&self) -> Result<(), Error> {
+        if let Some(ref err) = self.cache_corrupted {
+            Err(Error::CacheCorrupted(err.clone()))
+        } else {
+            Ok(())
+        }
+    }
+    fn get_data(&self) -> Result<&Value, Error> {
+        self.check_cache_corrupted()?;
+        Ok(&self.data)
+    }
+    fn get_data_mut(&mut self) -> Result<&mut Value, Error> {
+        self.check_cache_corrupted()?;
+        Ok(&mut self.data)
     }
     pub async fn close(mut self) -> Result<(), Error> {
         use tokio::io::AsyncWriteExt;
@@ -114,11 +133,11 @@ impl Store {
         ptr: &JsonPointer<S, V>,
     ) -> Result<T, Error> {
         Ok(serde_json::from_value(
-            ptr.get(&self.data).unwrap_or(&Value::Null).clone(),
+            ptr.get(self.get_data()?).unwrap_or(&Value::Null).clone(),
         )?)
     }
     pub fn dump(&self) -> Value {
-        self.data.clone()
+        self.get_data().unwrap().clone()
     }
     pub async fn put<T: Serialize, S: AsRef<str>, V: SegList>(
         &mut self,
@@ -126,7 +145,7 @@ impl Store {
         value: &T,
     ) -> Result<Arc<Revision>, Error> {
         let mut patch = DiffPatch(json_patch::diff(
-            ptr.get(&self.data).unwrap_or(&Value::Null),
+            ptr.get(self.get_data()?).unwrap_or(&Value::Null),
             &serde_json::to_value(value)?,
         ));
         patch.0.prepend(ptr);
@@ -135,8 +154,9 @@ impl Store {
     pub async fn apply(&mut self, patch: DiffPatch) -> Result<Arc<Revision>, Error> {
         use tokio::io::AsyncWriteExt;
 
+        self.check_cache_corrupted()?;
         let patch_bin = serde_cbor::to_vec(&patch.0)?;
-        json_patch::patch(&mut self.data, &patch.0)?;
+        json_patch::patch(self.get_data_mut()?, &patch.0)?;
 
         async fn sync_to_disk(file: &mut File, patch_bin: &[u8]) -> Result<(), IOError> {
             file.write_all(patch_bin).await?;
@@ -145,8 +165,9 @@ impl Store {
             Ok(())
         }
         if let Err(e) = sync_to_disk(&mut *self.file, &patch_bin).await {
-            eprintln!("I/O Error: {}", e);
-            panic!("Failed to sync data to disk after successfully applying changes in memory.");
+            let e = Arc::new(e);
+            self.cache_corrupted = Some(e.clone());
+            return Err(Error::CacheCorrupted(e));
             // TODO: try to recover.
         }
 
@@ -223,7 +244,7 @@ impl Transaction {
         ptr: &JsonPointer<S, V>,
     ) -> Result<Value, Error> {
         let mut data: Value = ptr
-            .get(&self.db.store.read().await.data)
+            .get(self.db.store.read().await.get_data()?)
             .unwrap_or(&Value::Null)
             .clone();
         for op in (self.updates.0).0.iter() {
