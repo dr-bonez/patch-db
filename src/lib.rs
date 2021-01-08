@@ -146,8 +146,7 @@ impl Store {
         }
         if let Err(e) = sync_to_disk(&mut *self.file, &patch_bin).await {
             eprintln!("I/O Error: {}", e);
-            eprintln!("Failed to sync data to disk after successfully applying changes in memory. Aborting...");
-            std::process::abort();
+            panic!("Failed to sync data to disk after successfully applying changes in memory.");
             // TODO: try to recover.
         }
 
