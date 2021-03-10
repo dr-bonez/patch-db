@@ -1,0 +1,15 @@
+[package]
+name = "patch-db-derive-internals"
+version = "0.1.0"
+authors = ["Aiden McClelland <me@drbonez.dev>"]
+edition = "2018"
+description = "internals for derive macros for defining typed patch dbs"
+license = "MIT"
+repository = "https://github.com/dr-bonez/patch-db"
+
+# See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
+
+[dependencies]
+syn = { version = "1.0.5", features = ["full", "extra-traits"] }
+quote = "1.0.1"
+proc-macro2 = "1.0.1"

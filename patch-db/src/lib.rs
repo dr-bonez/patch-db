@@ -16,7 +16,7 @@ use tokio::{
     fs::File,
     sync::{
         broadcast::{Receiver, Sender},
-        RwLock,
+        Mutex, RwLock,
     },
 };
 
@@ -228,9 +228,28 @@ pub trait Checkpoint {
         &'a self,
         ptr: &'a JsonPointer<S, V>,
     ) -> BoxFuture<Result<Value, Error>>;
-    fn locks(&self) -> &[(JsonPointer, LockerGuard)];
-    fn locker(&self) -> &Locker;
+    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, LockerGuard)]>);
     fn apply(&mut self, patch: DiffPatch);
+    fn get<
+        'a,
+        T: for<'de> Deserialize<'de> + 'a,
+        S: AsRef<str> + Clone + Send + Sync + 'a,
+        V: SegList + Clone + Send + Sync + 'a,
+    >(
+        &'a mut self,
+        ptr: &'a JsonPointer<S, V>,
+        lock: LockType,
+    ) -> BoxFuture<'a, Result<T, Error>>;
+    fn put<
+        'a,
+        T: Serialize + Send + Sync + 'a,
+        S: AsRef<str> + Send + Sync + 'a,
+        V: SegList + Send + Sync + 'a,
+    >(
+        &'a mut self,
+        ptr: &'a JsonPointer<S, V>,
+        value: &'a T,
+    ) -> BoxFuture<'a, Result<(), Error>>;
 }
 
 pub struct Transaction {
@@ -276,8 +295,18 @@ impl Transaction {
     ) {
         match lock {
             LockType::None => (),
-            LockType::Read => self.db.locker.add_read_lock(ptr, &mut self.locks).await,
-            LockType::Write => self.db.locker.add_write_lock(ptr, &mut self.locks).await,
+            LockType::Read => {
+                self.db
+                    .locker
+                    .add_read_lock(ptr, &mut self.locks, &mut [])
+                    .await
+            }
+            LockType::Write => {
+                self.db
+                    .locker
+                    .add_write_lock(ptr, &mut self.locks, &mut [])
+                    .await
+            }
         }
     }
     pub async fn get<T: for<'de> Deserialize<'de>, S: AsRef<str> + Clone, V: SegList + Clone>(
@@ -292,7 +321,7 @@ impl Transaction {
     }
     pub async fn put<T: Serialize, S: AsRef<str>, V: SegList>(
         &mut self,
-        ptr: &JsonPointer<S>,
+        ptr: &JsonPointer<S, V>,
         value: &T,
     ) -> Result<(), Error> {
         let old = Transaction::get_value(self, ptr).await?;
@@ -314,14 +343,35 @@ impl<'a> Checkpoint for &'a mut Transaction {
     ) -> BoxFuture<'b, Result<Value, Error>> {
         Transaction::get_value(self, ptr).boxed()
     }
-    fn locks(&self) -> &[(JsonPointer, LockerGuard)] {
-        &self.locks
-    }
-    fn locker(&self) -> &Locker {
-        &self.db.locker
+    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, LockerGuard)]>) {
+        (&self.db.locker, vec![&mut self.locks])
     }
     fn apply(&mut self, patch: DiffPatch) {
         (self.updates.0).0.extend((patch.0).0)
+    }
+    fn get<
+        'b,
+        T: for<'de> Deserialize<'de> + 'b,
+        S: AsRef<str> + Clone + Send + Sync + 'b,
+        V: SegList + Clone + Send + Sync + 'b,
+    >(
+        &'b mut self,
+        ptr: &'b JsonPointer<S, V>,
+        lock: LockType,
+    ) -> BoxFuture<'b, Result<T, Error>> {
+        Transaction::get(self, ptr, lock).boxed()
+    }
+    fn put<
+        'b,
+        T: Serialize + Send + Sync + 'b,
+        S: AsRef<str> + Send + Sync + 'b,
+        V: SegList + Send + Sync + 'b,
+    >(
+        &'b mut self,
+        ptr: &'b JsonPointer<S, V>,
+        value: &'b T,
+    ) -> BoxFuture<'b, Result<(), Error>> {
+        Transaction::put(self, ptr, value).boxed()
     }
 }
 
@@ -363,23 +413,16 @@ impl<Tx: Checkpoint> SubTransaction<Tx> {
         ptr: &JsonPointer<S, V>,
         lock: LockType,
     ) {
-        for lock in self.locks.iter() {
-            if ptr.starts_with(&lock.0) {
-                return;
-            }
-        }
         match lock {
             LockType::None => (),
             LockType::Read => {
-                self.parent
-                    .locker()
-                    .add_read_lock(ptr, &mut self.locks)
-                    .await
+                let (locker, mut locks) = self.parent.locker_and_locks();
+                locker.add_read_lock(ptr, &mut self.locks, &mut locks).await
             }
             LockType::Write => {
-                self.parent
-                    .locker()
-                    .add_write_lock(ptr, &mut self.locks)
+                let (locker, mut locks) = self.parent.locker_and_locks();
+                locker
+                    .add_write_lock(ptr, &mut self.locks, &mut locks)
                     .await
             }
         }
@@ -400,7 +443,7 @@ impl<Tx: Checkpoint> SubTransaction<Tx> {
     }
     pub async fn put<T: Serialize, S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
-        ptr: &JsonPointer<S>,
+        ptr: &JsonPointer<S, V>,
         value: &T,
     ) -> Result<(), Error> {
         let old = SubTransaction::get_value(self, ptr).await?;
@@ -422,14 +465,37 @@ impl<'a, Tx: Checkpoint + Send + Sync> Checkpoint for &'a mut SubTransaction<Tx>
     ) -> BoxFuture<'b, Result<Value, Error>> {
         SubTransaction::get_value(self, ptr).boxed()
     }
-    fn locks(&self) -> &[(JsonPointer, LockerGuard)] {
-        &self.locks
-    }
-    fn locker(&self) -> &Locker {
-        &self.parent.locker()
+    fn locker_and_locks(&mut self) -> (&Locker, Vec<&mut [(JsonPointer, LockerGuard)]>) {
+        let (locker, mut locks) = self.parent.locker_and_locks();
+        locks.push(&mut self.locks);
+        (locker, locks)
     }
     fn apply(&mut self, patch: DiffPatch) {
         (self.updates.0).0.extend((patch.0).0)
+    }
+    fn get<
+        'b,
+        T: for<'de> Deserialize<'de> + 'b,
+        S: AsRef<str> + Clone + Send + Sync + 'b,
+        V: SegList + Clone + Send + Sync + 'b,
+    >(
+        &'b mut self,
+        ptr: &'b JsonPointer<S, V>,
+        lock: LockType,
+    ) -> BoxFuture<'b, Result<T, Error>> {
+        SubTransaction::get(self, ptr, lock).boxed()
+    }
+    fn put<
+        'b,
+        T: Serialize + Send + Sync + 'b,
+        S: AsRef<str> + Send + Sync + 'b,
+        V: SegList + Send + Sync + 'b,
+    >(
+        &'b mut self,
+        ptr: &'b JsonPointer<S, V>,
+        value: &'b T,
+    ) -> BoxFuture<'b, Result<(), Error>> {
+        SubTransaction::put(self, ptr, value).boxed()
     }
 }
 
@@ -442,12 +508,50 @@ pub enum LockType {
 
 pub enum LockerGuard {
     Empty,
-    Read(ReadGuard<HashMap<String, Locker>>),
-    Write(WriteGuard<HashMap<String, Locker>>),
+    Read(LockerReadGuard),
+    Write(LockerWriteGuard),
 }
 impl LockerGuard {
     pub fn take(&mut self) -> Self {
         std::mem::replace(self, LockerGuard::Empty)
+    }
+}
+
+#[derive(Debug, Clone)]
+pub struct LockerReadGuard(Arc<Mutex<Option<ReadGuard<HashMap<String, Locker>>>>>);
+impl LockerReadGuard {
+    async fn upgrade(&self) -> Option<LockerWriteGuard> {
+        let guard = self.0.try_lock().unwrap().take();
+        if let Some(g) = guard {
+            Some(LockerWriteGuard(
+                Some(ReadGuard::upgrade(g).await.unwrap()),
+                Some(self.clone()),
+            ))
+        } else {
+            None
+        }
+    }
+}
+impl From<ReadGuard<HashMap<String, Locker>>> for LockerReadGuard {
+    fn from(guard: ReadGuard<HashMap<String, Locker>>) -> Self {
+        LockerReadGuard(Arc::new(Mutex::new(Some(guard))))
+    }
+}
+
+pub struct LockerWriteGuard(
+    Option<WriteGuard<HashMap<String, Locker>>>,
+    Option<LockerReadGuard>,
+);
+impl From<WriteGuard<HashMap<String, Locker>>> for LockerWriteGuard {
+    fn from(guard: WriteGuard<HashMap<String, Locker>>) -> Self {
+        LockerWriteGuard(Some(guard), None)
+    }
+}
+impl Drop for LockerWriteGuard {
+    fn drop(&mut self) {
+        if let (Some(write), Some(read)) = (self.0.take(), self.1.take()) {
+            *read.0.try_lock().unwrap() = Some(WriteGuard::downgrade(write));
+        }
     }
 }
 
@@ -475,24 +579,29 @@ impl Locker {
         }
         lock.unwrap()
     }
-    pub async fn add_read_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
+    async fn add_read_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
         &self,
         ptr: &JsonPointer<S, V>,
         locks: &mut Vec<(JsonPointer, LockerGuard)>,
+        extra_locks: &mut [&mut [(JsonPointer, LockerGuard)]],
     ) {
-        for lock in locks.iter() {
+        for lock in extra_locks
+            .iter()
+            .flat_map(|a| a.iter())
+            .chain(locks.iter())
+        {
             if ptr.starts_with(&lock.0) {
                 return;
             }
         }
         locks.push((
             JsonPointer::to_owned(ptr.clone()),
-            LockerGuard::Read(self.lock_read(ptr).await),
+            LockerGuard::Read(self.lock_read(ptr).await.into()),
         ));
     }
     pub async fn lock_write<S: AsRef<str>, V: SegList>(
         &self,
-        ptr: &JsonPointer<S>,
+        ptr: &JsonPointer<S, V>,
     ) -> WriteGuard<HashMap<String, Locker>> {
         let mut lock = self.0.clone().write().await.unwrap();
         for seg in ptr.iter() {
@@ -506,26 +615,86 @@ impl Locker {
         }
         lock
     }
-    pub async fn add_write_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
+    async fn add_write_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
         &self,
         ptr: &JsonPointer<S, V>,
         locks: &mut Vec<(JsonPointer, LockerGuard)>,
+        extra_locks: &mut [&mut [(JsonPointer, LockerGuard)]],
     ) {
-        for lock in locks.iter_mut() {
-            if ptr.starts_with(&lock.0) {
+        let mut final_lock = None;
+        for lock in extra_locks
+            .iter_mut()
+            .flat_map(|a| a.iter_mut())
+            .chain(locks.iter_mut())
+        {
+            enum Choice {
+                Return,
+                Continue,
+                Break,
+            }
+            let choice: Choice;
+            if let Some(remainder) = ptr.strip_prefix(&lock.0) {
                 let guard = lock.1.take();
                 lock.1 = match guard {
-                    LockerGuard::Read(l) => {
-                        LockerGuard::Write(ReadGuard::upgrade(l).await.unwrap())
+                    LockerGuard::Read(LockerReadGuard(guard)) if !remainder.is_empty() => {
+                        // read guard already exists at higher level
+                        let mut lock = guard.lock().await;
+                        if let Some(l) = lock.take() {
+                            let mut orig_lock = None;
+                            let mut lock = ReadGuard::upgrade(l).await.unwrap();
+                            for seg in remainder.iter() {
+                                let new_lock = if let Some(locker) = lock.get(seg) {
+                                    locker.0.clone().write().await.unwrap()
+                                } else {
+                                    lock.insert(seg.to_owned(), Locker::new());
+                                    lock.get(seg).unwrap().0.clone().write().await.unwrap()
+                                };
+                                if orig_lock.is_none() {
+                                    orig_lock = Some(lock);
+                                }
+                                lock = new_lock;
+                            }
+                            final_lock = Some(LockerGuard::Write(lock.into()));
+                            choice = Choice::Break;
+                            LockerGuard::Read(WriteGuard::downgrade(orig_lock.unwrap()).into())
+                        } else {
+                            drop(lock);
+                            choice = Choice::Return;
+                            LockerGuard::Read(LockerReadGuard(guard))
+                        }
                     }
-                    a => a,
+                    LockerGuard::Read(l) => {
+                        // read exists, convert to write
+                        if let Some(upgraded) = l.upgrade().await {
+                            final_lock = Some(LockerGuard::Write(upgraded));
+                            choice = Choice::Break;
+                        } else {
+                            choice = Choice::Continue;
+                        }
+                        LockerGuard::Read(l)
+                    }
+                    LockerGuard::Write(l) => {
+                        choice = Choice::Return;
+                        LockerGuard::Write(l)
+                    } // leave it alone, already sufficiently locked
+                    LockerGuard::Empty => {
+                        unreachable!("LockerGuard found empty");
+                    }
                 };
-                return;
+                match choice {
+                    Choice::Return => return,
+                    Choice::Break => break,
+                    Choice::Continue => continue,
+                }
             }
         }
         locks.push((
             JsonPointer::to_owned(ptr.clone()),
-            LockerGuard::Read(self.lock_read(ptr).await),
+            if let Some(lock) = final_lock {
+                lock
+            } else {
+                LockerGuard::Write(self.lock_write(ptr).await.into())
+            },
         ));
     }
 }
