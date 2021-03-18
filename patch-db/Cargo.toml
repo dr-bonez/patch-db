@@ -19,3 +19,6 @@ serde_json = "1.0.61"
 serde_cbor = { git = "https://github.com/dr-bonez/cbor.git" }
 thiserror = "1.0.23"
 tokio = { version = "1.0.1", features = ["sync", "fs", "rt", "io-util", "macros"] }
+
+[dev-dependencies]
+serde = { version = "1.0.118", features = ["rc", "derive"] }

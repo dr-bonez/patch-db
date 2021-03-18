@@ -17,20 +17,22 @@ fn build_model_struct(input: &syn::DeriveInput, ast: &syn::DataStruct) -> TokenS
     let base_name = &input.ident;
     let model_vis = &input.vis;
     quote! {
-        #model_vis struct #model_name<Tx: patch_db::Checkpoint> {
+        #model_vis struct #model_name<Parent: Model> {
             data: Option<Box<#base_name>>,
+            lock_type: patch_db::LockType,
             ptr: json_ptr::JsonPointer,
             tx: Tx,
         }
         impl<Tx: patch_db::Checkpoint> #model_name<Tx> {
             pub fn get(&mut self, lock: patch_db::LockType) -> Result<&#base_name, patch_db::Error> {
                 if let Some(data) = self.data.as_ref() {
-                    match lock {
-                        patch_db::LockType::None => Ok(data),
+                    match (self.lock_type, lock) {
+                        (patch_db::LockType::None, patch_db::LockType::Read) => Ok(data),
 
                     }
                 } else {
-                    self.tx.get(&self.ptr, lock)
+                    self.data = Some(Box::new(self.tx.get(&self.ptr, lock).await?));
+                    Ok(self.data.as_ref().unwrap())
                 }
             }
         }
