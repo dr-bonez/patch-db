@@ -1,7 +1,8 @@
 use std::collections::HashMap;
 use std::fs::OpenOptions;
-use std::future::Future;
 use std::io::Error as IOError;
+use std::marker::PhantomData;
+use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::Arc;
 
@@ -956,276 +957,82 @@ impl Default for Locker {
     }
 }
 
-pub trait ModelData: Send + Sync {
-    type Inner;
-    fn apply<
-        'a,
-        F: FnOnce(&mut Self::Inner) -> ResFut + Send + Sync + 'a,
-        ResFut: Future<Output = Res> + Send + Sync + 'a,
-        Res: Send + Sync + 'a,
-    >(
-        &'a mut self,
-        f: F,
-    ) -> BoxFuture<'a, Res>;
-}
-
-pub enum Never {}
-impl ModelData for Never {
-    type Inner = Never;
-    fn apply<
-        'a,
-        F: FnOnce(&mut Self::Inner) -> ResFut + 'a,
-        ResFut: Future<Output = Res> + 'a,
-        Res: 'a,
-    >(
-        &'a mut self,
-        _: F,
-    ) -> BoxFuture<'a, Res> {
-        match *self {}
+pub struct ModelData<T: Serialize + for<'de> Deserialize<'de>>(T);
+impl<T: Serialize + for<'de> Deserialize<'de>> Deref for ModelData<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.0
     }
 }
 
-pub enum GenericModelData<T: Serialize + for<'de> Deserialize<'de>, Parent: ModelData> {
-    Uninitialized(Vec<ChildHooks<T>>),
-    Ref(
-        Arc<dyn Fn(&mut Parent::Inner) -> &mut T + Send + Sync>,
-        Arc<Mutex<Parent>>,
-    ),
-    Owned(Box<T>),
-}
-impl<T: Serialize + for<'de> Deserialize<'de>, Parent: ModelData> GenericModelData<T, Parent> {
-    pub fn is_initialized(&self) -> bool {
-        match self {
-            GenericModelData::Uninitialized(_) => false,
-            _ => true,
-        }
-    }
-    async fn apply<
-        F: FnOnce(&mut T) -> ResFut + Send + Sync,
-        ResFut: Future<Output = Res> + Send + Sync,
-        Res: Send + Sync,
-    >(
-        &mut self,
-        f: F,
-    ) -> Res {
-        match self {
-            GenericModelData::Owned(data) => f(data).await,
-            GenericModelData::Ref(g, parent) => parent.lock().await.apply(|t| f(g(t))).await,
-            _ => panic!("uninitialized"),
-        }
-    }
-}
-impl<T: Serialize + for<'de> Deserialize<'de> + Send + Sync, Parent: ModelData> ModelData
-    for GenericModelData<T, Parent>
-{
-    type Inner = T;
-    fn apply<
-        'a,
-        F: FnOnce(&mut Self::Inner) -> ResFut + Send + Sync + 'a,
-        ResFut: Future<Output = Res> + Send + Sync + 'a,
-        Res: Send + Sync + 'a,
-    >(
-        &'a mut self,
-        f: F,
-    ) -> BoxFuture<'a, Res> {
-        self.apply(f).boxed()
-    }
-}
-
-pub struct ChildHooks<T> {
-    init_parent: Box<dyn for<'a> FnOnce(&'a mut T) -> BoxFuture<'a, ()> + Send + Sync>,
-    save_data: Box<
-        dyn Fn() -> BoxFuture<'static, Result<Vec<(JsonPointer, Value)>, serde_json::Error>>
-            + Send
-            + Sync,
-    >,
-}
-impl<T> ChildHooks<T> {
-    async fn init_parent(self, parent: &mut T) {
-        (self.init_parent)(parent).await
-    }
-    async fn save_data(&self) -> Result<Vec<(JsonPointer, Value)>, serde_json::Error> {
-        (self.save_data)().await
-    }
-}
-
-pub trait Model {
-    type Data: ModelData;
-}
-
-impl Model for Never {
-    type Data = Never;
-}
-
-pub struct GenericModel<T: Serialize + for<'de> Deserialize<'de>, Parent: ModelData> {
-    data: Arc<Mutex<GenericModelData<T, Parent>>>,
+pub struct ModelDataMut<T: Serialize + for<'de> Deserialize<'de>> {
+    original: Value,
+    current: T,
     ptr: JsonPointer,
 }
-impl<T, Parent> GenericModel<T, Parent>
+impl<T: Serialize + for<'de> Deserialize<'de>> ModelDataMut<T> {
+    pub async fn save<Tx: Checkpoint>(self, tx: &mut Tx) -> Result<(), Error> {
+        let current = serde_json::to_value(&self.current)?;
+        let mut diff = DiffPatch(json_patch::diff(&self.original, &current));
+        let target = tx.get_value(&self.ptr, None).await?;
+        diff.rebase(&DiffPatch(json_patch::diff(&self.original, &target)));
+        diff.0.prepend(&self.ptr);
+        tx.apply(diff);
+        Ok(())
+    }
+}
+impl<T: Serialize + for<'de> Deserialize<'de>> Deref for ModelDataMut<T> {
+    type Target = T;
+    fn deref(&self) -> &Self::Target {
+        &self.current
+    }
+}
+impl<T: Serialize + for<'de> Deserialize<'de>> DerefMut for ModelDataMut<T> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        &mut self.current
+    }
+}
+
+pub struct Model<T: Serialize + for<'de> Deserialize<'de>> {
+    ptr: JsonPointer,
+    phantom: PhantomData<T>,
+}
+impl<T> Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static,
-    Parent: ModelData + 'static,
 {
     pub fn new(ptr: JsonPointer) -> Self {
         Self {
-            data: Arc::new(Mutex::new(GenericModelData::Uninitialized(Vec::new()))),
             ptr,
+            phantom: PhantomData,
         }
-    }
-
-    // locks
-    async fn fetch<Tx: Checkpoint>(&mut self, tx: &mut Tx) -> Result<(), Error> {
-        let mut data = self.data.lock().await;
-        if let GenericModelData::Uninitialized(children) = &mut *data {
-            let mut a: Box<T> = tx.get(&self.ptr, LockType::None).await?;
-            for child in std::mem::replace(children, Vec::new()) {
-                child.init_parent(&mut a).await;
-            }
-            *data = GenericModelData::Owned(a);
-        }
-
-        Ok(())
     }
 
     pub async fn lock<Tx: Checkpoint>(&self, tx: &mut Tx, lock: LockType) {
         tx.lock(&self.ptr, lock).await
     }
 
-    // locks
-    pub async fn peek<
-        Tx: Checkpoint,
-        F: FnOnce(&T) -> ResFut + Send + Sync,
-        ResFut: Future<Output = Res> + Send + Sync,
-        Res: Send + Sync,
-    >(
-        &mut self,
-        tx: &mut Tx,
-        f: F,
-    ) -> Result<Res, Error> {
-        self.lock(tx, LockType::Read).await;
-        self.fetch(tx).await?;
-        Ok(self.data.lock().await.apply(|t| f(t)).await)
+    pub async fn get<Tx: Checkpoint>(&self, tx: &mut Tx) -> Result<ModelData<T>, Error> {
+        Ok(ModelData(tx.get(&self.ptr, LockType::Read).await?))
     }
 
-    // locks
-    pub async fn apply<
-        Tx: Checkpoint,
-        F: FnOnce(&mut T) -> ResFut + Send + Sync,
-        ResFut: Future<Output = Res> + Send + Sync,
-        Res: Send + Sync,
-    >(
-        &mut self,
-        tx: &mut Tx,
-        f: F,
-    ) -> Result<Res, Error> {
+    pub async fn get_mut<Tx: Checkpoint>(&mut self, tx: &mut Tx) -> Result<ModelDataMut<T>, Error> {
         self.lock(tx, LockType::Write).await;
-        self.fetch(tx).await?;
-        Ok(self.data.lock().await.apply(f).await)
+        let original = tx.get_value(&self.ptr, None).await?;
+        let current = serde_json::from_value(original.clone())?;
+        Ok(ModelDataMut {
+            original,
+            current,
+            ptr: self.ptr.clone(),
+        })
     }
 
-    // locks
-    pub async fn child<C, F, S, V>(
-        &mut self,
-        path: &JsonPointer<S, V>,
-        f: F,
-    ) -> GenericModel<C, GenericModelData<T, Parent>>
-    where
-        C: Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static,
-        F: Fn(&mut T) -> &mut C + Send + Sync + 'static,
-        S: AsRef<str>,
-        V: SegList,
-        for<'v> &'v V: IntoIterator<Item = &'v json_ptr::PtrSegment>,
-    {
-        let arc_f = Arc::new(f);
-        let ptr = self.ptr.clone() + path;
-        let mut data_ref = self.data.lock().await;
-        let data = if let GenericModelData::Uninitialized(children) = &mut *data_ref {
-            let data = Arc::new(Mutex::new(GenericModelData::Uninitialized(Vec::new())));
-            let init_parent_data = data.clone();
-            let parent_data = self.data.clone();
-            let save_data_data = data.clone();
-            let save_data_ptr = ptr.clone();
-            children.push(ChildHooks {
-                init_parent: Box::new(move |parent| {
-                    async move {
-                        let mut data_ref = init_parent_data.lock().await;
-                        let self_data = std::mem::replace(
-                            &mut *data_ref,
-                            GenericModelData::Uninitialized(Vec::new()),
-                        );
-                        match self_data {
-                            GenericModelData::Owned(t) => *arc_f(parent) = *t,
-                            GenericModelData::Uninitialized(children) => {
-                                for child in children {
-                                    child.init_parent(arc_f(parent)).await; // TODO: can probably parallelize
-                                }
-                            }
-                            _ => (),
-                        }
-                        *data_ref = GenericModelData::Ref(arc_f, parent_data);
-                    }
-                    .boxed()
-                }),
-                save_data: Box::new(move || {
-                    let ptr = save_data_ptr.clone();
-                    let data = save_data_data.clone();
-                    async move {
-                        let mut data_ref = data.lock().await;
-                        if let GenericModelData::Uninitialized(children) = &mut *data_ref {
-                            let mut res = Vec::new();
-                            for child in children {
-                                res.append(&mut child.save_data().await?)
-                            }
-                            Ok(res)
-                        } else {
-                            Ok(vec![(
-                                ptr,
-                                data_ref
-                                    .apply(|t| futures::future::ready(serde_json::to_value(t)))
-                                    .await?,
-                            )])
-                        }
-                    }
-                    .boxed()
-                }),
-            });
-            data
-        } else {
-            Arc::new(Mutex::new(GenericModelData::Ref(
-                arc_f.clone(),
-                self.data.clone(),
-            )))
-        };
-        GenericModel { data, ptr }
-    }
-
-    /// locks
-    pub async fn save<Tx: Checkpoint>(&mut self, tx: &mut Tx) -> Result<(), Error> {
-        let mut data_ref = self.data.lock().await;
-        for (ptr, value) in if let GenericModelData::Uninitialized(children) = &mut *data_ref {
-            let mut res = Vec::new();
-            for child in children {
-                res.append(&mut child.save_data().await?)
-            }
-            res
-        } else {
-            vec![(
-                self.ptr.clone(),
-                data_ref
-                    .apply(|t| futures::future::ready(serde_json::to_value(t)))
-                    .await?,
-            )]
-        } {
-            tx.put_value(&ptr, &value).await?;
+    pub fn child<C: Serialize + for<'de> Deserialize<'de>>(&self, index: &str) -> Model<C> {
+        let mut ptr = self.ptr.clone();
+        ptr.push_end(index);
+        Model {
+            ptr,
+            phantom: PhantomData,
         }
-        Ok(())
     }
-}
-
-impl<T, Parent> Model for GenericModel<T, Parent>
-where
-    T: Serialize + for<'de> Deserialize<'de> + Send + Sync,
-    Parent: ModelData,
-{
-    type Data = GenericModelData<T, Parent>;
 }

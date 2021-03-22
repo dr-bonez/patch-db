@@ -15,10 +15,7 @@ pub struct Sample {
     b: Child,
 }
 
-pub struct SampleModel<Parent: Model = Never>(GenericModel<Sample, Parent::Data>);
-impl<Parent: Model> Model for SampleModel<Parent> {
-    type Data = GenericModelData<Sample, Parent::Data>;
-}
+pub struct SampleModel(Model<Sample>);
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
 pub struct Child {
@@ -26,7 +23,4 @@ pub struct Child {
     b: usize,
 }
 
-pub struct ChildModel<Parent: Model = Never>(GenericModel<Child, Parent::Data>);
-impl<Parent: Model> Model for ChildModel<Parent> {
-    type Data = GenericModelData<Sample, Parent::Data>;
-}
+pub struct ChildModel(Model<Child>);
