@@ -221,7 +221,13 @@ impl Store {
                 json_patch::patch(&mut data, &patch)?;
                 revision += 1;
             }
-            serde_cbor::to_writer(std::fs::File::create(&bak)?, &data)?;
+            let bak_tmp = bak.with_extension("bak.tmp");
+            let mut backup_file = std::fs::File::create(&bak_tmp)?;
+            serde_cbor::to_writer(&mut backup_file, &revision)?;
+            serde_cbor::to_writer(&mut backup_file, &data)?;
+            backup_file.flush()?;
+            backup_file.sync_all()?;
+            std::fs::rename(&bak_tmp, &bak)?;
             nix::unistd::ftruncate(std::os::unix::io::AsRawFd::as_raw_fd(&*f), 0)
                 .map_err(|e| std::io::Error::new(std::io::ErrorKind::Other, e))?;
             serde_cbor::to_writer(&mut *f, &revision)?;
@@ -321,7 +327,7 @@ pub struct PatchDb {
 }
 impl PatchDb {
     pub async fn open<P: AsRef<Path> + Send + 'static>(path: P) -> Result<Self, Error> {
-        let (subscriber, _) = tokio::sync::broadcast::channel(16);
+        let (subscriber, _) = tokio::sync::broadcast::channel(16); // TODO: make this unbounded
 
         Ok(PatchDb {
             store: Arc::new(RwLock::new(Store::open(path).await?)),
@@ -340,7 +346,10 @@ impl PatchDb {
         ptr: &JsonPointer<S, V>,
         value: &T,
     ) -> Result<Arc<Revision>, Error> {
-        self.store.write().await.put(ptr, value).await
+        let mut store = self.store.write().await;
+        let rev = store.put(ptr, value).await?;
+        self.subscriber.send(rev.clone()).unwrap_or_default();
+        Ok(rev)
     }
     pub async fn apply(
         &self,
