@@ -3,4 +3,8 @@ members = [
     "patch-db",
     "patch-db-derive",
     "patch-db-derive-internals",
+    "cbor",
+    "json-patch",
+    "json-ptr",
+    "qutex",
 ]

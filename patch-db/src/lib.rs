@@ -880,8 +880,8 @@ impl Locker {
     async fn add_write_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
         &self,
         ptr: &JsonPointer<S, V>,
-        locks: &mut Vec<(JsonPointer, LockerGuard)>,
-        extra_locks: &mut [&mut [(JsonPointer, LockerGuard)]],
+        locks: &mut Vec<(JsonPointer, LockerGuard)>, // tx locks
+        extra_locks: &mut [&mut [(JsonPointer, LockerGuard)]], // tx parent locks
     ) {
         let mut final_lock = None;
         for lock in extra_locks
@@ -900,7 +900,7 @@ impl Locker {
                 lock.1 = match guard {
                     LockerGuard::Read(LockerReadGuard(guard)) if !remainder.is_empty() => {
                         // read guard already exists at higher level
-                        let mut lock = guard.try_lock().unwrap();
+                        let mut lock = guard.lock().await;
                         if let Some(l) = lock.take() {
                             let mut orig_lock = None;
                             let mut lock = ReadGuard::upgrade(l).await.unwrap();
