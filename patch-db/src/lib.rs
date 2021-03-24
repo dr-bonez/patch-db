@@ -1025,7 +1025,7 @@ where
         Ok(ModelData(tx.get(&self.ptr, LockType::Read).await?))
     }
 
-    pub async fn get_mut<Tx: Checkpoint>(&mut self, tx: &mut Tx) -> Result<ModelDataMut<T>, Error> {
+    pub async fn get_mut<Tx: Checkpoint>(&self, tx: &mut Tx) -> Result<ModelDataMut<T>, Error> {
         self.lock(tx, LockType::Write).await;
         let original = tx.get_value(&self.ptr, None).await?;
         let current = serde_json::from_value(original.clone())?;

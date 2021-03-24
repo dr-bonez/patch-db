@@ -1,8 +1,8 @@
 [workspace]
 members = [
     "patch-db",
-    "patch-db-derive",
-    "patch-db-derive-internals",
+    "patch-db-macro",
+    "patch-db-macro-internals",
     "cbor",
     "json-patch",
     "json-ptr",
