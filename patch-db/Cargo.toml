@@ -21,4 +21,6 @@ thiserror = "1.0.23"
 tokio = { version = "1.0.1", features = ["sync", "fs", "rt", "io-util", "macros"] }
 
 [dev-dependencies]
+proptest = "1.0.0"
 serde = { version = "1.0.118", features = ["rc", "derive"] }
+tokio = { version = "1.0.1", features = ["sync", "fs", "rt", "rt-multi-thread", "io-util", "macros"] }
