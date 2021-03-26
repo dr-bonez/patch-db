@@ -19,6 +19,7 @@ serde_json = "1.0.61"
 serde_cbor = { path = "../cbor" }
 thiserror = "1.0.23"
 tokio = { version = "1.0.1", features = ["sync", "fs", "rt", "io-util", "macros"] }
+patch-db-macro = { path = "../patch-db-macro" }
 
 [dev-dependencies]
 proptest = "1.0.0"

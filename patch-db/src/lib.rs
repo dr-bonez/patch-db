@@ -1002,13 +1002,14 @@ impl<T: Serialize + for<'de> Deserialize<'de>> DerefMut for ModelDataMut<T> {
     }
 }
 
+#[derive(Debug)]
 pub struct Model<T: Serialize + for<'de> Deserialize<'de>> {
     ptr: JsonPointer,
     phantom: PhantomData<T>,
 }
 impl<T> Model<T>
 where
-    T: Serialize + for<'de> Deserialize<'de> + Send + Sync + 'static,
+    T: Serialize + for<'de> Deserialize<'de>,
 {
     pub fn new(ptr: JsonPointer) -> Self {
         Self {
@@ -1044,4 +1045,19 @@ where
             phantom: PhantomData,
         }
     }
+}
+impl<T> std::clone::Clone for Model<T>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    fn clone(&self) -> Self {
+        Model {
+            ptr: self.ptr.clone(),
+            phantom: PhantomData,
+        }
+    }
+}
+
+pub trait HasModel {
+    type Model;
 }
