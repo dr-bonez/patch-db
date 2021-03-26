@@ -1,4 +1,6 @@
 use super::*;
+use crate as patch_db;
+use patch_db_macro::HasModel;
 
 #[tokio::test]
 async fn basic() {
@@ -21,18 +23,11 @@ async fn basic() {
     assert_eq!(get_res, "hello");
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
 pub struct Sample {
     a: String,
+    #[model(name = ChildModel)]
     b: Child,
-}
-
-pub struct SampleModel(Model<Sample>);
-impl core::ops::Deref for SampleModel {
-    type Target = Model<Sample>;
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
 }
 
 #[derive(Debug, serde::Deserialize, serde::Serialize)]
@@ -40,5 +35,3 @@ pub struct Child {
     a: String,
     b: usize,
 }
-
-pub struct ChildModel(Model<Child>);
