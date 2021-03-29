@@ -1,16 +1,17 @@
-use std::collections::HashMap;
 use std::fs::OpenOptions;
 use std::io::Error as IOError;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 use std::path::Path;
 use std::sync::Arc;
+use std::{collections::HashMap, path::PathBuf};
 
 use fd_lock_rs::FdLock;
 use futures::future::{BoxFuture, FutureExt};
 use json_patch::{AddOperation, Patch, PatchOperation, RemoveOperation, ReplaceOperation};
 use json_ptr::{JsonPointer, SegList};
-use qutex_2::{QrwLock, ReadGuard, WriteGuard};
+use lazy_static::lazy_static;
+use qutex_2::{Guard, QrwLock, Qutex, ReadGuard, WriteGuard};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
@@ -186,28 +187,43 @@ impl DiffPatch {
     }
 }
 
+lazy_static! {
+    static ref OPEN_STORES: Mutex<HashMap<PathBuf, Qutex<()>>> = Mutex::new(HashMap::new());
+}
+
 pub struct Store {
     file: FdLock<File>,
+    _lock: Guard<()>,
     cache_corrupted: Option<Arc<IOError>>,
     data: Value,
     revision: u64,
 }
 impl Store {
-    pub async fn open<P: AsRef<Path> + Send + 'static>(path: P) -> Result<Self, Error> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+        let path = tokio::fs::canonicalize(path).await?;
+        let _lock = {
+            let mut lock = OPEN_STORES.lock().await;
+            if let Some(open) = lock.get(&path) {
+                open.clone().lock().await.unwrap()
+            } else {
+                let tex = Qutex::new(());
+                lock.insert(path.clone(), tex.clone());
+                tex.lock().await.unwrap()
+            }
+        };
         Ok(tokio::task::spawn_blocking(move || {
             use std::io::Write;
 
-            let p = path.as_ref();
-            let bak = p.with_extension("bak");
+            let bak = path.with_extension("bak");
             if bak.exists() {
-                std::fs::rename(&bak, p)?;
+                std::fs::rename(&bak, &path)?;
             }
             let mut f = FdLock::lock(
                 OpenOptions::new()
                     .create(true)
                     .read(true)
                     .append(true)
-                    .open(p)?,
+                    .open(&path)?,
                 fd_lock_rs::LockType::Exclusive,
                 true,
             )?;
@@ -238,6 +254,7 @@ impl Store {
 
             Ok::<_, Error>(Store {
                 file: f.map(File::from_std),
+                _lock,
                 cache_corrupted: None,
                 data,
                 revision,
@@ -326,7 +343,7 @@ pub struct PatchDb {
     locker: Locker,
 }
 impl PatchDb {
-    pub async fn open<P: AsRef<Path> + Send + 'static>(path: P) -> Result<Self, Error> {
+    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
         let (subscriber, _) = tokio::sync::broadcast::channel(16); // TODO: make this unbounded
 
         Ok(PatchDb {

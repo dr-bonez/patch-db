@@ -80,11 +80,11 @@ proptest! {
 #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
 pub struct Sample {
     a: String,
-    #[model(name = ChildModel)]
+    #[model(name = "ChildModel")]
     b: Child,
 }
 
-#[derive(Debug, serde::Deserialize, serde::Serialize)]
+#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
 pub struct Child {
     a: String,
     b: usize,
