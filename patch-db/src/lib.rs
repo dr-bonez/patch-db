@@ -200,19 +200,22 @@ pub struct Store {
 }
 impl Store {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
-        if !path.as_ref().exists() {
-            tokio::fs::File::create(path.as_ref()).await?;
-        }
-        let path = tokio::fs::canonicalize(path).await?;
-        let _lock = {
-            let mut lock = OPEN_STORES.lock().await;
-            if let Some(open) = lock.get(&path) {
-                open.clone().lock().await.unwrap()
-            } else {
-                let tex = Qutex::new(());
-                lock.insert(path.clone(), tex.clone());
-                tex.lock().await.unwrap()
+        let (_lock, path) = {
+            if !path.as_ref().exists() {
+                tokio::fs::File::create(path.as_ref()).await?;
             }
+            let path = tokio::fs::canonicalize(path).await?;
+            let mut lock = OPEN_STORES.lock().await;
+            (
+                if let Some(open) = lock.get(&path) {
+                    open.clone().lock().await.unwrap()
+                } else {
+                    let tex = Qutex::new(());
+                    lock.insert(path.clone(), tex.clone());
+                    tex.lock().await.unwrap()
+                },
+                path,
+            )
         };
         Ok(tokio::task::spawn_blocking(move || {
             use std::io::Write;
