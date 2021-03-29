@@ -246,5 +246,10 @@ fn build_model_struct(
 }
 
 fn build_model_enum(base: &DeriveInput, ast: &DataEnum, model_name: Option<Ident>) -> TokenStream {
-    todo!()
+    todo!(
+        "use {:?}, {:?} and {:?} to create a model that can become an enum of models",
+        base,
+        ast,
+        model_name
+    )
 }
