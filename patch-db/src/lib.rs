@@ -302,7 +302,7 @@ impl Store {
     pub fn dump(&self) -> Value {
         self.get_data().unwrap().clone()
     }
-    pub async fn put<T: Serialize, S: AsRef<str>, V: SegList>(
+    pub async fn put<T: Serialize + ?Sized, S: AsRef<str>, V: SegList>(
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
@@ -364,7 +364,7 @@ impl PatchDb {
     ) -> Result<T, Error> {
         self.store.read().await.get(ptr)
     }
-    pub async fn put<T: Serialize, S: AsRef<str>, V: SegList>(
+    pub async fn put<T: Serialize + ?Sized, S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
         value: &T,
