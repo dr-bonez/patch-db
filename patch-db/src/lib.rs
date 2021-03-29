@@ -200,6 +200,9 @@ pub struct Store {
 }
 impl Store {
     pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+        if !path.as_ref().exists() {
+            tokio::fs::File::create(path.as_ref()).await?;
+        }
         let path = tokio::fs::canonicalize(path).await?;
         let _lock = {
             let mut lock = OPEN_STORES.lock().await;
