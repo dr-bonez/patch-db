@@ -64,7 +64,7 @@ fn build_model_struct(
                     .attrs
                     .iter()
                     .filter(|attr| attr.path.is_ident("model"))
-                    .filter_map(|attr| Some(attr.parse_args::<MetaNameValue>().unwrap()))
+                    .filter_map(|attr| attr.parse_args::<MetaNameValue>().ok())
                     .filter(|nv| nv.path.is_ident("name"))
                     .find_map(|nv| match nv.lit {
                         Lit::Str(s) => Some(s),
@@ -127,6 +127,7 @@ fn build_model_struct(
         }
         Fields::Unnamed(f) => {
             if f.unnamed.len() == 1 {
+                // newtype wrapper
                 let field = &f.unnamed[0];
                 let ty = &field.ty;
                 let inner_model: Type = if let Some(child_model_name) = field
@@ -145,7 +146,7 @@ fn build_model_struct(
                 } else if field.attrs.iter().any(|attr| attr.path.is_ident("model")) {
                     syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap()
                 } else {
-                    syn::parse2(quote! { patch_db::Model<#ty> }).unwrap()
+                    syn::parse2(quote! { patch_db::Model::<#ty> }).unwrap()
                 };
                 return quote! {
                     #[derive(Debug, Clone)]
@@ -156,14 +157,14 @@ fn build_model_struct(
                             &self.0
                         }
                     }
-                    impl #model_name {
-                        pub fn new(ptr: json_ptr::JsonPointer) -> Self {
-                            #model_name(#inner_model::new(ptr))
+                    impl From<json_ptr::JsonPointer> for #model_name {
+                        fn from(ptr: json_ptr::JsonPointer) -> Self {
+                            #model_name(#inner_model::from(ptr))
                         }
                     }
                     impl From<patch_db::Model<#base_name>> for #model_name {
                         fn from(model: patch_db::Model<#base_name>) -> Self {
-                            #model_name(#inner_model::from(model))
+                            #model_name(#inner_model::from(json_ptr::JsonPointer::from(model)))
                         }
                     }
                     impl From<#inner_model> for #model_name {
@@ -225,14 +226,16 @@ fn build_model_struct(
             }
         }
         impl #model_name {
-            pub fn new(ptr: json_ptr::JsonPointer) -> Self {
-                #model_name(patch_db::Model::new(ptr))
-            }
             #(
                 pub fn #child_fn_name(&self) -> #child_model {
                     self.0.child(#child_path).into()
                 }
             )*
+        }
+        impl From<json_ptr::JsonPointer> for #model_name {
+            fn from(ptr: json_ptr::JsonPointer) -> Self {
+                #model_name(From::from(ptr))
+            }
         }
         impl From<patch_db::Model<#base_name>> for #model_name {
             fn from(model: patch_db::Model<#base_name>) -> Self {

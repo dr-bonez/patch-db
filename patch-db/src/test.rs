@@ -1,9 +1,14 @@
-use super::*;
-use crate as patch_db;
-use patch_db_macro::HasModel;
-use proptest::prelude::*;
 use std::future::Future;
-use tokio::{fs, runtime::Builder};
+use std::sync::Arc;
+
+use json_ptr::JsonPointer;
+use patch_db::{HasModel, PatchDb, Revision};
+use proptest::prelude::*;
+use serde_json::Value;
+use tokio::fs;
+use tokio::runtime::Builder;
+
+use crate as patch_db;
 
 async fn init_db(db_name: String) -> PatchDb {
     cleanup_db(&db_name).await;
@@ -15,6 +20,7 @@ async fn init_db(db_name: String) -> PatchDb {
             b: Child {
                 a: "test2".to_string(),
                 b: 1,
+                c: NewType(None),
             },
         },
     )
@@ -79,7 +85,7 @@ proptest! {
 #[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
 pub struct Sample {
     a: String,
-    #[model(name = "ChildModel")]
+    #[model]
     b: Child,
 }
 
@@ -87,4 +93,8 @@ pub struct Sample {
 pub struct Child {
     a: String,
     b: usize,
+    c: NewType,
 }
+
+#[derive(Debug, serde::Deserialize, serde::Serialize, HasModel)]
+pub struct NewType(Option<Box<Sample>>);
