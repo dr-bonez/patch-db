@@ -1,8 +1,14 @@
 [package]
 name = "patch-db"
 version = "0.1.0"
-authors = ["Aiden McClelland <me@drbonez.dev>"]
+authors = ["Aiden McClelland <aiden@start9labs.com>"]
 edition = "2018"
+categories = ["database-implementations"]
+keywords = ["json", "json-pointer", "json-patch"]
+description = "A database that tracks state updates as RFC 6902 JSON Patches"
+repository = "https://github.com/Start9Labs/patch-db"
+license = "MIT"
+readme = "README.md"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
