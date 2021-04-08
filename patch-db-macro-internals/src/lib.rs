@@ -60,7 +60,27 @@ fn build_model_struct(
                 let ident = field.ident.clone().unwrap();
                 child_fn_name.push(ident.clone());
                 let ty = &field.ty;
-                child_model.push(syn::parse2(quote! { patch_db::Model<#ty> }).unwrap()); // TODO: check attr
+                if let Some(child_model_name) = field
+                    .attrs
+                    .iter()
+                    .filter(|attr| attr.path.is_ident("model"))
+                    .filter_map(|attr| attr.parse_args::<MetaNameValue>().ok())
+                    .filter(|nv| nv.path.is_ident("name"))
+                    .find_map(|nv| match nv.lit {
+                        Lit::Str(s) => Some(s),
+                        _ => None,
+                    })
+                {
+                    let child_model_ty =
+                        Ident::new(&child_model_name.value(), child_model_name.span());
+                    child_model
+                        .push(syn::parse2(quote! { #child_model_ty }).expect("invalid model name"));
+                } else if field.attrs.iter().any(|attr| attr.path.is_ident("model")) {
+                    child_model
+                        .push(syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap());
+                } else {
+                    child_model.push(syn::parse2(quote! { patch_db::Model<#ty> }).unwrap());
+                }
                 let serde_rename = field
                     .attrs
                     .iter()
@@ -107,9 +127,92 @@ fn build_model_struct(
         }
         Fields::Unnamed(f) => {
             if f.unnamed.len() == 1 {
+                // newtype wrapper
+                let field = &f.unnamed[0];
+                let ty = &field.ty;
+                let inner_model: Type = if let Some(child_model_name) = field
+                    .attrs
+                    .iter()
+                    .filter(|attr| attr.path.is_ident("model"))
+                    .filter_map(|attr| Some(attr.parse_args::<MetaNameValue>().unwrap()))
+                    .filter(|nv| nv.path.is_ident("name"))
+                    .find_map(|nv| match nv.lit {
+                        Lit::Str(s) => Some(s),
+                        _ => None,
+                    }) {
+                    let child_model_ty =
+                        Ident::new(&child_model_name.value(), child_model_name.span());
+                    syn::parse2(quote! { #child_model_ty }).unwrap()
+                } else if field.attrs.iter().any(|attr| attr.path.is_ident("model")) {
+                    syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap()
+                } else {
+                    syn::parse2(quote! { patch_db::Model::<#ty> }).unwrap()
+                };
+                return quote! {
+                    #[derive(Debug, Clone)]
+                    #model_vis struct #model_name(#inner_model);
+                    impl core::ops::Deref for #model_name {
+                        type Target = #inner_model;
+                        fn deref(&self) -> &Self::Target {
+                            &self.0
+                        }
+                    }
+                    impl From<json_ptr::JsonPointer> for #model_name {
+                        fn from(ptr: json_ptr::JsonPointer) -> Self {
+                            #model_name(#inner_model::from(ptr))
+                        }
+                    }
+                    impl From<patch_db::Model<#base_name>> for #model_name {
+                        fn from(model: patch_db::Model<#base_name>) -> Self {
+                            #model_name(#inner_model::from(json_ptr::JsonPointer::from(model)))
+                        }
+                    }
+                    impl From<#inner_model> for #model_name {
+                        fn from(model: #inner_model) -> Self {
+                            #model_name(model)
+                        }
+                    }
+                    impl patch_db::HasModel for #base_name {
+                        type Model = #model_name;
+                    }
+                };
             } else if f.unnamed.len() > 1 {
+                for (i, field) in f.unnamed.iter().enumerate() {
+                    child_fn_name.push(Ident::new(
+                        &format!("idx_{}", i),
+                        proc_macro2::Span::call_site(),
+                    ));
+                    let ty = &field.ty;
+                    if let Some(child_model_name) = field
+                        .attrs
+                        .iter()
+                        .filter(|attr| attr.path.is_ident("model"))
+                        .filter_map(|attr| Some(attr.parse_args::<MetaNameValue>().unwrap()))
+                        .filter(|nv| nv.path.is_ident("name"))
+                        .find_map(|nv| match nv.lit {
+                            Lit::Str(s) => Some(s),
+                            _ => None,
+                        })
+                    {
+                        let child_model_ty =
+                            Ident::new(&child_model_name.value(), child_model_name.span());
+                        child_model.push(
+                            syn::parse2(quote! { #child_model_ty }).expect("invalid model name"),
+                        );
+                    } else if field.attrs.iter().any(|attr| attr.path.is_ident("model")) {
+                        child_model.push(
+                            syn::parse2(quote! { <#ty as patch_db::HasModel>::Model }).unwrap(),
+                        );
+                    } else {
+                        child_model.push(syn::parse2(quote! { patch_db::Model<#ty> }).unwrap());
+                    }
+                    // TODO: serde rename for tuple structs?
+                    child_path.push(LitStr::new(
+                        &format!("{}", i),
+                        proc_macro2::Span::call_site(),
+                    ));
+                }
             }
-            todo!()
         }
         Fields::Unit => (),
     }
@@ -123,15 +226,21 @@ fn build_model_struct(
             }
         }
         impl #model_name {
-            pub fn new(ptr: json_ptr::JsonPointer) -> Self {
-                #model_name(patch_db::Model::new(ptr))
-            }
-            // foreach element, create accessor fn
             #(
                 pub fn #child_fn_name(&self) -> #child_model {
                     self.0.child(#child_path).into()
                 }
             )*
+        }
+        impl From<json_ptr::JsonPointer> for #model_name {
+            fn from(ptr: json_ptr::JsonPointer) -> Self {
+                #model_name(From::from(ptr))
+            }
+        }
+        impl From<patch_db::Model<#base_name>> for #model_name {
+            fn from(model: patch_db::Model<#base_name>) -> Self {
+                #model_name(model)
+            }
         }
         impl patch_db::HasModel for #base_name {
             type Model = #model_name;
@@ -140,5 +249,10 @@ fn build_model_struct(
 }
 
 fn build_model_enum(base: &DeriveInput, ast: &DataEnum, model_name: Option<Ident>) -> TokenStream {
-    todo!()
+    todo!(
+        "use {:?}, {:?} and {:?} to create a model that can become an enum of models",
+        base,
+        ast,
+        model_name
+    )
 }
