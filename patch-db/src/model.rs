@@ -84,6 +84,15 @@ where
         }
     }
 }
+impl<T> Model<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Send + Sync,
+{
+    pub async fn put<Tx: Checkpoint>(&self, tx: &mut Tx, value: &T) -> Result<(), Error> {
+        self.lock(tx, LockType::Write).await;
+        tx.put(&self.ptr, value).await
+    }
+}
 impl<T> From<JsonPointer> for Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
