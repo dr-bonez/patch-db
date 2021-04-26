@@ -258,11 +258,41 @@ fn build_model_struct(
     }
 }
 
-fn build_model_enum(base: &DeriveInput, ast: &DataEnum, model_name: Option<Ident>) -> TokenStream {
-    todo!(
-        "use {:?}, {:?} and {:?} to create a model that can become an enum of models",
-        base,
-        ast,
-        model_name
-    )
+fn build_model_enum(base: &DeriveInput, _: &DataEnum, model_name: Option<Ident>) -> TokenStream {
+    let model_name = model_name.unwrap_or_else(|| {
+        Ident::new(
+            &format!("{}Model", base.ident),
+            proc_macro2::Span::call_site(),
+        )
+    });
+    let base_name = &base.ident;
+    let model_vis = &base.vis;
+    quote! {
+        #[derive(Debug, Clone)]
+        #model_vis struct #model_name(patch_db::Model<#base_name>);
+        impl core::ops::Deref for #model_name {
+            type Target = patch_db::Model<#base_name>;
+            fn deref(&self) -> &Self::Target {
+                &self.0
+            }
+        }
+        impl From<patch_db::json_ptr::JsonPointer> for #model_name {
+            fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
+                #model_name(From::from(ptr))
+            }
+        }
+        impl AsRef<patch_db::json_ptr::JsonPointer> for #model_name {
+            fn as_ref(&self) -> &patch_db::json_ptr::JsonPointer {
+                self.0.as_ref()
+            }
+        }
+        impl From<patch_db::Model<#base_name>> for #model_name {
+            fn from(model: patch_db::Model<#base_name>) -> Self {
+                #model_name(model)
+            }
+        }
+        impl patch_db::HasModel for #base_name {
+            type Model = #model_name;
+        }
+    }
 }
