@@ -21,6 +21,7 @@ pub use patch::Revision;
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
 pub use transaction::{Checkpoint, SubTransaction, Transaction};
+pub use json_ptr;
 
 #[derive(Error, Debug)]
 pub enum Error {

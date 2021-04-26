@@ -157,14 +157,14 @@ fn build_model_struct(
                             &self.0
                         }
                     }
-                    impl From<json_ptr::JsonPointer> for #model_name {
-                        fn from(ptr: json_ptr::JsonPointer) -> Self {
+                    impl From<patch_db::json_ptr::JsonPointer> for #model_name {
+                        fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
                             #model_name(#inner_model::from(ptr))
                         }
                     }
                     impl From<patch_db::Model<#base_name>> for #model_name {
                         fn from(model: patch_db::Model<#base_name>) -> Self {
-                            #model_name(#inner_model::from(json_ptr::JsonPointer::from(model)))
+                            #model_name(#inner_model::from(patch_db::json_ptr::JsonPointer::from(model)))
                         }
                     }
                     impl From<#inner_model> for #model_name {
@@ -232,8 +232,8 @@ fn build_model_struct(
                 }
             )*
         }
-        impl From<json_ptr::JsonPointer> for #model_name {
-            fn from(ptr: json_ptr::JsonPointer) -> Self {
+        impl From<patch_db::json_ptr::JsonPointer> for #model_name {
+            fn from(ptr: patch_db::json_ptr::JsonPointer) -> Self {
                 #model_name(From::from(ptr))
             }
         }
