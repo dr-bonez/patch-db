@@ -18,7 +18,7 @@ mod test;
 pub use json_ptr;
 pub use locker::{LockType, Locker};
 pub use model::{
-    BoxModel, HasModel, MapModel, Model, ModelData, ModelDataMut, OptionModel, VecModel,
+    BoxModel, HasModel, Map, MapModel, Model, ModelData, ModelDataMut, OptionModel, VecModel,
 };
 pub use patch::Revision;
 pub use patch_db_macro::HasModel;
