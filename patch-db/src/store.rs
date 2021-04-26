@@ -123,6 +123,12 @@ impl Store {
         self.file.unlock(true).map_err(|e| e.1)?;
         Ok(())
     }
+    pub fn exists<S: AsRef<str>, V: SegList>(
+        &self,
+        ptr: &JsonPointer<S, V>,
+    ) -> Result<bool, Error> {
+        Ok(ptr.get(self.get_data()?).unwrap_or(&Value::Null) != &Value::Null)
+    }
     pub fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
@@ -189,6 +195,12 @@ impl PatchDb {
             locker: Locker::new(),
             subscriber: Arc::new(subscriber),
         })
+    }
+    pub async fn exists<S: AsRef<str>, V: SegList>(
+        &self,
+        ptr: &JsonPointer<S, V>,
+    ) -> Result<bool, Error> {
+        self.store.read().await.exists(ptr)
     }
     pub async fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(
         &self,

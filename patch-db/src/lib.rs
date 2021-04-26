@@ -15,13 +15,15 @@ mod transaction;
 #[cfg(test)]
 mod test;
 
+pub use json_ptr;
 pub use locker::{LockType, Locker};
-pub use model::{BoxModel, HasModel, MapModel, Model, ModelData, ModelDataMut, VecModel};
+pub use model::{
+    BoxModel, HasModel, MapModel, Model, ModelData, ModelDataMut, OptionModel, VecModel,
+};
 pub use patch::Revision;
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
 pub use transaction::{Checkpoint, SubTransaction, Transaction};
-pub use json_ptr;
 
 #[derive(Error, Debug)]
 pub enum Error {
