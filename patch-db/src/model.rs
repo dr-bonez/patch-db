@@ -231,15 +231,22 @@ impl<T: Serialize + for<'de> Deserialize<'de>> HasModel for Vec<T> {
 pub trait Map {
     type Key: AsRef<str>;
     type Value;
+    fn get(&self, key: &Self::Key) -> Option<&Self::Value>;
 }
 
-impl<K: AsRef<str>, V> Map for HashMap<K, V> {
+impl<K: AsRef<str> + Eq + Hash, V> Map for HashMap<K, V> {
     type Key = K;
     type Value = V;
+    fn get(&self, key: &Self::Key) -> Option<&Self::Value> {
+        HashMap::get(self, key)
+    }
 }
-impl<K: AsRef<str>, V> Map for BTreeMap<K, V> {
+impl<K: AsRef<str> + Ord, V> Map for BTreeMap<K, V> {
     type Key = K;
     type Value = V;
+    fn get(&self, key: &Self::Key) -> Option<&Self::Value> {
+        self.get(key)
+    }
 }
 
 #[derive(Debug, Clone)]
