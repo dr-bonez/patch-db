@@ -1,7 +1,7 @@
 use std::collections::{BTreeMap, HashMap};
 use std::hash::Hash;
 use std::marker::PhantomData;
-use std::ops::{Deref, DerefMut, Index};
+use std::ops::{Deref, DerefMut};
 
 use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
@@ -228,9 +228,30 @@ impl<T: Serialize + for<'de> Deserialize<'de>> HasModel for Vec<T> {
     type Model = VecModel<T>;
 }
 
+pub trait Map {
+    type Key: AsRef<str>;
+    type Value;
+}
+
+impl<K: AsRef<str>, V> Map for HashMap<K, V> {
+    type Key = K;
+    type Value = V;
+}
+impl<K: AsRef<str>, V> Map for BTreeMap<K, V> {
+    type Key = K;
+    type Value = V;
+}
+
 #[derive(Debug, Clone)]
-pub struct MapModel<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>>(Model<T>);
-impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> Deref for MapModel<T> {
+pub struct MapModel<T>(Model<T>)
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>;
+impl<T> Deref for MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
     type Target = Model<T>;
     fn deref(&self) -> &Self::Target {
         &self.0
@@ -238,31 +259,26 @@ impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> Deref fo
 }
 impl<T> MapModel<T>
 where
-    T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>,
-    for<'a, 'de> <T as Index<&'a str>>::Output: Serialize + Deserialize<'de>,
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
 {
-    pub fn idx(&self, idx: &str) -> Model<Option<<T as Index<&str>>::Output>> {
-        self.child(idx)
+    pub fn idx(&self, idx: &<T as Map>::Key) -> Model<Option<<T as Map>::Value>> {
+        self.child(idx.as_ref())
     }
 }
 impl<T> MapModel<T>
 where
-    T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>,
-    for<'a, 'de> <T as Index<&'a str>>::Output: Serialize + Deserialize<'de> + HasModel,
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de> + HasModel,
 {
-    pub fn idx_model(&self, idx: &str) -> OptionModel<<T as Index<&str>>::Output> {
-        self.child(idx).into()
+    pub fn idx_model(&self, idx: &<T as Map>::Key) -> OptionModel<<T as Map>::Value> {
+        self.child(idx.as_ref()).into()
     }
 }
-impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> From<Model<Box<T>>>
-    for MapModel<T>
-{
-    fn from(model: Model<Box<T>>) -> Self {
-        MapModel(From::from(JsonPointer::from(model)))
-    }
-}
-impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> From<JsonPointer>
-    for MapModel<T>
+impl<T> From<JsonPointer> for MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
 {
     fn from(ptr: JsonPointer) -> Self {
         MapModel(From::from(ptr))
@@ -270,7 +286,8 @@ impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> From<Jso
 }
 impl<T> AsRef<JsonPointer> for MapModel<T>
 where
-    T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>,
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
 {
     fn as_ref(&self) -> &JsonPointer {
         self.0.as_ref()
@@ -278,17 +295,15 @@ where
 }
 impl<K, V> HasModel for HashMap<K, V>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq,
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + AsRef<str>,
     V: Serialize + for<'de> Deserialize<'de>,
-    for<'a> HashMap<K, V>: Index<&'a str>,
 {
     type Model = MapModel<HashMap<K, V>>;
 }
 impl<K, V> HasModel for BTreeMap<K, V>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq,
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + AsRef<str>,
     V: Serialize + for<'de> Deserialize<'de>,
-    for<'a> HashMap<K, V>: Index<&'a str>,
 {
     type Model = MapModel<HashMap<K, V>>;
 }
