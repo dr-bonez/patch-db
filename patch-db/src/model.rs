@@ -95,6 +95,14 @@ where
         }
     }
 }
+impl<T> AsRef<JsonPointer> for Model<T>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    fn as_ref(&self) -> &JsonPointer {
+        &self.ptr
+    }
+}
 impl<T> From<Model<T>> for JsonPointer
 where
     T: Serialize + for<'de> Deserialize<'de>,
@@ -116,9 +124,10 @@ where
 }
 
 pub trait HasModel {
-    type Model: From<JsonPointer>;
+    type Model: From<JsonPointer> + AsRef<JsonPointer>;
 }
 
+#[derive(Debug, Clone)]
 pub struct BoxModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> Deref for BoxModel<T> {
     type Target = T::Model;
@@ -131,6 +140,14 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<Model<Box<T>>> fo
         BoxModel(T::Model::from(JsonPointer::from(model)))
     }
 }
+impl<T> AsRef<JsonPointer> for BoxModel<T>
+where
+    T: HasModel + Serialize + for<'de> Deserialize<'de>,
+{
+    fn as_ref(&self) -> &JsonPointer {
+        self.0.as_ref()
+    }
+}
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for BoxModel<T> {
     fn from(ptr: JsonPointer) -> Self {
         BoxModel(T::Model::from(ptr))
@@ -140,6 +157,34 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
     type Model = BoxModel<T>;
 }
 
+#[derive(Debug, Clone)]
+pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
+    pub async fn check<Tx: Checkpoint>(self, tx: &mut Tx) -> Result<Option<T::Model>, Error> {
+        Ok(if tx.exists(self.0.as_ref(), None).await? {
+            Some(self.0)
+        } else {
+            None
+        })
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<Model<Option<T>>>
+    for OptionModel<T>
+{
+    fn from(model: Model<Option<T>>) -> Self {
+        OptionModel(T::Model::from(JsonPointer::from(model)))
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for OptionModel<T> {
+    fn from(ptr: JsonPointer) -> Self {
+        OptionModel(T::Model::from(ptr))
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Option<T> {
+    type Model = BoxModel<T>;
+}
+
+#[derive(Debug, Clone)]
 pub struct VecModel<T: Serialize + for<'de> Deserialize<'de>>(Model<Vec<T>>);
 impl<T: Serialize + for<'de> Deserialize<'de>> Deref for VecModel<T> {
     type Target = Model<Vec<T>>;
@@ -152,8 +197,8 @@ impl<T: Serialize + for<'de> Deserialize<'de>> VecModel<T> {
         self.child(&format!("{}", idx))
     }
 }
-impl<T: Serialize + for<'de> Deserialize<'de>> From<Model<Box<T>>> for VecModel<T> {
-    fn from(model: Model<Box<T>>) -> Self {
+impl<T: Serialize + for<'de> Deserialize<'de>> From<Model<Vec<T>>> for VecModel<T> {
+    fn from(model: Model<Vec<T>>) -> Self {
         VecModel(From::from(JsonPointer::from(model)))
     }
 }
@@ -162,10 +207,19 @@ impl<T: Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for VecModel<T>
         VecModel(From::from(ptr))
     }
 }
+impl<T> AsRef<JsonPointer> for VecModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    fn as_ref(&self) -> &JsonPointer {
+        self.0.as_ref()
+    }
+}
 impl<T: Serialize + for<'de> Deserialize<'de>> HasModel for Vec<T> {
     type Model = VecModel<T>;
 }
 
+#[derive(Debug, Clone)]
 pub struct MapModel<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>>(Model<T>);
 impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> Deref for MapModel<T> {
     type Target = Model<T>;
@@ -182,6 +236,15 @@ where
         self.child(idx)
     }
 }
+impl<T> MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>,
+    for<'a, 'de> <T as Index<&'a str>>::Output: Serialize + Deserialize<'de> + HasModel,
+{
+    pub fn idx_model(&self, idx: &str) -> OptionModel<<T as Index<&str>>::Output> {
+        self.child(idx).into()
+    }
+}
 impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> From<Model<Box<T>>>
     for MapModel<T>
 {
@@ -194,6 +257,14 @@ impl<T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>> From<Jso
 {
     fn from(ptr: JsonPointer) -> Self {
         MapModel(From::from(ptr))
+    }
+}
+impl<T> AsRef<JsonPointer> for MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + for<'a> Index<&'a str>,
+{
+    fn as_ref(&self) -> &JsonPointer {
+        self.0.as_ref()
     }
 }
 impl<K, V> HasModel for HashMap<K, V>

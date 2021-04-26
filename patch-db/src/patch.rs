@@ -77,6 +77,7 @@ impl DiffPatch {
                 .collect(),
         ))
     }
+
     pub fn rebase(&mut self, onto: &DiffPatch) {
         let DiffPatch(Patch(ops)) = self;
         let DiffPatch(Patch(onto_ops)) = onto;
@@ -147,6 +148,31 @@ impl DiffPatch {
                 }
             }
         }
+    }
+
+    pub fn exists(&self) -> Option<bool> {
+        let mut res = None;
+        for op in &(self.0).0 {
+            match op {
+                PatchOperation::Add(a) => {
+                    if a.path.is_empty() {
+                        res = Some(!a.value.is_null());
+                    }
+                }
+                PatchOperation::Replace(a) => {
+                    if a.path.is_empty() {
+                        res = Some(!a.value.is_null())
+                    }
+                }
+                PatchOperation::Remove(a) => {
+                    if a.path.is_empty() {
+                        res = Some(false)
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        res
     }
 }
 impl Default for DiffPatch {

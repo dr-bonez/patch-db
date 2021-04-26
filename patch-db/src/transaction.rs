@@ -15,6 +15,11 @@ use crate::Error;
 
 pub trait Checkpoint: Sized {
     fn rebase(&mut self) -> Result<(), Error>;
+    fn exists<'a, S: AsRef<str> + Send + Sync + 'a, V: SegList + Send + Sync + 'a>(
+        &'a mut self,
+        ptr: &'a JsonPointer<S, V>,
+        store_read_lock: Option<RwLockReadGuard<'a, Store>>,
+    ) -> BoxFuture<'a, Result<bool, Error>>;
     fn get_value<'a, S: AsRef<str> + Send + Sync + 'a, V: SegList + Send + Sync + 'a>(
         &'a mut self,
         ptr: &'a JsonPointer<S, V>,
@@ -72,6 +77,23 @@ impl Transaction {
             self.updates.rebase(&rev.patch);
         }
         Ok(())
+    }
+    async fn exists<S: AsRef<str>, V: SegList>(
+        &mut self,
+        ptr: &JsonPointer<S, V>,
+        store_read_lock: Option<RwLockReadGuard<'_, Store>>,
+    ) -> Result<bool, Error> {
+        let exists = {
+            let store_lock = self.db.store.clone();
+            let store = if let Some(store_read_lock) = store_read_lock {
+                store_read_lock
+            } else {
+                store_lock.read().await
+            };
+            self.rebase()?;
+            ptr.get(store.get_data()?).unwrap_or(&Value::Null) != &Value::Null
+        };
+        Ok(self.updates.for_path(ptr).exists().unwrap_or(exists))
     }
     async fn get_value<S: AsRef<str>, V: SegList>(
         &mut self,
@@ -164,6 +186,13 @@ impl<'a> Checkpoint for &'a mut Transaction {
     fn rebase(&mut self) -> Result<(), Error> {
         Transaction::rebase(self)
     }
+    fn exists<'b, S: AsRef<str> + Send + Sync + 'b, V: SegList + Send + Sync + 'b>(
+        &'b mut self,
+        ptr: &'b JsonPointer<S, V>,
+        store_read_lock: Option<RwLockReadGuard<'b, Store>>,
+    ) -> BoxFuture<'b, Result<bool, Error>> {
+        Transaction::exists(self, ptr, store_read_lock).boxed()
+    }
     fn get_value<'b, S: AsRef<str> + Send + Sync + 'b, V: SegList + Send + Sync + 'b>(
         &'b mut self,
         ptr: &'b JsonPointer<S, V>,
@@ -240,6 +269,23 @@ impl<Tx: Checkpoint + Send + Sync> SubTransaction<Tx> {
             self.updates.rebase(&rev.patch);
         }
         Ok(())
+    }
+    async fn exists<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
+        &mut self,
+        ptr: &JsonPointer<S, V>,
+        store_read_lock: Option<RwLockReadGuard<'_, Store>>,
+    ) -> Result<bool, Error> {
+        let exists = {
+            let store_lock = self.parent.store();
+            let store = if let Some(store_read_lock) = store_read_lock {
+                store_read_lock
+            } else {
+                store_lock.read().await
+            };
+            self.rebase()?;
+            self.parent.exists(ptr, Some(store)).await?
+        };
+        Ok(self.updates.for_path(ptr).exists().unwrap_or(exists))
     }
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
@@ -335,6 +381,13 @@ impl<Tx: Checkpoint + Send + Sync> SubTransaction<Tx> {
 impl<'a, Tx: Checkpoint + Send + Sync> Checkpoint for &'a mut SubTransaction<Tx> {
     fn rebase(&mut self) -> Result<(), Error> {
         SubTransaction::rebase(self)
+    }
+    fn exists<'b, S: AsRef<str> + Send + Sync + 'b, V: SegList + Send + Sync + 'b>(
+        &'b mut self,
+        ptr: &'b JsonPointer<S, V>,
+        store_read_lock: Option<RwLockReadGuard<'b, Store>>,
+    ) -> BoxFuture<'b, Result<bool, Error>> {
+        SubTransaction::exists(self, ptr, store_read_lock).boxed()
     }
     fn get_value<'b, S: AsRef<str> + Send + Sync + 'b, V: SegList + Send + Sync + 'b>(
         &'b mut self,
