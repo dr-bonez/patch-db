@@ -7,9 +7,8 @@ use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
-use crate::locker::LockType;
-use crate::transaction::Checkpoint;
 use crate::Error;
+use crate::{locker::LockType, DbHandle};
 
 pub struct ModelData<T: Serialize + for<'de> Deserialize<'de>>(T);
 impl<T: Serialize + for<'de> Deserialize<'de>> Deref for ModelData<T> {
@@ -25,13 +24,13 @@ pub struct ModelDataMut<T: Serialize + for<'de> Deserialize<'de>> {
     ptr: JsonPointer,
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> ModelDataMut<T> {
-    pub async fn save<Tx: Checkpoint>(self, tx: &mut Tx) -> Result<(), Error> {
+    pub async fn save<Db: DbHandle>(self, db: &mut Db) -> Result<(), Error> {
         let current = serde_json::to_value(&self.current)?;
         let mut diff = crate::patch::diff(&self.original, &current);
-        let target = tx.get_value(&self.ptr, None).await?;
+        let target = db.get_value(&self.ptr, None).await?;
         diff.rebase(&crate::patch::diff(&self.original, &target));
         diff.prepend(&self.ptr);
-        tx.apply(diff);
+        db.apply(diff).await?;
         Ok(())
     }
 }
@@ -56,17 +55,18 @@ impl<T> Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de>,
 {
-    pub async fn lock<Tx: Checkpoint>(&self, tx: &mut Tx, lock: LockType) {
-        tx.lock(&self.ptr, lock).await
+    pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock: LockType) {
+        db.lock(&self.ptr, lock).await
     }
 
-    pub async fn get<Tx: Checkpoint>(&self, tx: &mut Tx) -> Result<ModelData<T>, Error> {
-        Ok(ModelData(tx.get(&self.ptr, LockType::Read).await?))
+    pub async fn get<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelData<T>, Error> {
+        db.lock(&self.ptr, LockType::Read).await;
+        Ok(ModelData(db.get(&self.ptr).await?))
     }
 
-    pub async fn get_mut<Tx: Checkpoint>(&self, tx: &mut Tx) -> Result<ModelDataMut<T>, Error> {
-        self.lock(tx, LockType::Write).await;
-        let original = tx.get_value(&self.ptr, None).await?;
+    pub async fn get_mut<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelDataMut<T>, Error> {
+        self.lock(db, LockType::Write).await;
+        let original = db.get_value(&self.ptr, None).await?;
         let current = serde_json::from_value(original.clone())?;
         Ok(ModelDataMut {
             original,
@@ -88,9 +88,9 @@ impl<T> Model<T>
 where
     T: Serialize + for<'de> Deserialize<'de> + Send + Sync,
 {
-    pub async fn put<Tx: Checkpoint>(&self, tx: &mut Tx, value: &T) -> Result<(), Error> {
-        self.lock(tx, LockType::Write).await;
-        tx.put(&self.ptr, value).await
+    pub async fn put<Db: DbHandle>(&self, db: &mut Db, value: &T) -> Result<(), Error> {
+        self.lock(db, LockType::Write).await;
+        db.put(&self.ptr, value).await
     }
 }
 impl<T> From<JsonPointer> for Model<T>
@@ -132,8 +132,8 @@ where
     }
 }
 
-pub trait HasModel {
-    type Model: From<JsonPointer> + AsRef<JsonPointer>;
+pub trait HasModel: Serialize + for<'de> Deserialize<'de> {
+    type Model: From<JsonPointer> + AsRef<JsonPointer> + Into<JsonPointer> + From<Model<Self>>;
 }
 
 #[derive(Debug, Clone)]
@@ -162,6 +162,11 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for 
         BoxModel(T::Model::from(ptr))
     }
 }
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<BoxModel<T>> for JsonPointer {
+    fn from(model: BoxModel<T>) -> Self {
+        model.0.into()
+    }
+}
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
     type Model = BoxModel<T>;
 }
@@ -169,12 +174,31 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
 #[derive(Debug, Clone)]
 pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
-    pub async fn check<Tx: Checkpoint>(self, tx: &mut Tx) -> Result<Option<T::Model>, Error> {
-        Ok(if tx.exists(self.0.as_ref(), None).await? {
+    pub async fn exists<Db: DbHandle>(&self, db: &mut Db) -> Result<bool, Error> {
+        db.lock(self.as_ref(), LockType::Read).await;
+        Ok(db.exists(&self.as_ref(), None).await?)
+    }
+
+    pub async fn check<Db: DbHandle>(self, db: &mut Db) -> Result<Option<T::Model>, Error> {
+        Ok(if self.exists(db).await? {
             Some(self.0)
         } else {
             None
         })
+    }
+
+    pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<(), Error> {
+        db.lock(self.as_ref(), LockType::Write).await;
+        db.put(self.as_ref(), &Value::Null).await
+    }
+}
+impl<T> OptionModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Send + Sync + HasModel,
+{
+    pub async fn put<Db: DbHandle>(&self, db: &mut Db, value: &T) -> Result<(), Error> {
+        db.lock(self.as_ref(), LockType::Write).await;
+        db.put(self.as_ref(), value).await
     }
 }
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<Model<Option<T>>>
@@ -189,8 +213,18 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for 
         OptionModel(T::Model::from(ptr))
     }
 }
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<OptionModel<T>> for JsonPointer {
+    fn from(model: OptionModel<T>) -> Self {
+        model.0.into()
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> AsRef<JsonPointer> for OptionModel<T> {
+    fn as_ref(&self) -> &JsonPointer {
+        self.0.as_ref()
+    }
+}
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Option<T> {
-    type Model = BoxModel<T>;
+    type Model = OptionModel<T>;
 }
 
 #[derive(Debug, Clone)]
@@ -214,6 +248,11 @@ impl<T: Serialize + for<'de> Deserialize<'de>> From<Model<Vec<T>>> for VecModel<
 impl<T: Serialize + for<'de> Deserialize<'de>> From<JsonPointer> for VecModel<T> {
     fn from(ptr: JsonPointer) -> Self {
         VecModel(From::from(ptr))
+    }
+}
+impl<T: Serialize + for<'de> Deserialize<'de>> From<VecModel<T>> for JsonPointer {
+    fn from(model: VecModel<T>) -> Self {
+        model.0.into()
     }
 }
 impl<T> AsRef<JsonPointer> for VecModel<T>
@@ -282,6 +321,15 @@ where
         self.child(idx.as_ref()).into()
     }
 }
+impl<T> From<Model<T>> for MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(model: Model<T>) -> Self {
+        MapModel(model)
+    }
+}
 impl<T> From<JsonPointer> for MapModel<T>
 where
     T: Serialize + for<'de> Deserialize<'de> + Map,
@@ -289,6 +337,15 @@ where
 {
     fn from(ptr: JsonPointer) -> Self {
         MapModel(From::from(ptr))
+    }
+}
+impl<T> From<MapModel<T>> for JsonPointer
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
+    fn from(model: MapModel<T>) -> Self {
+        model.0.into()
     }
 }
 impl<T> AsRef<JsonPointer> for MapModel<T>
@@ -309,8 +366,8 @@ where
 }
 impl<K, V> HasModel for BTreeMap<K, V>
 where
-    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + AsRef<str>,
+    K: Serialize + for<'de> Deserialize<'de> + Ord + AsRef<str>,
     V: Serialize + for<'de> Deserialize<'de>,
 {
-    type Model = MapModel<HashMap<K, V>>;
+    type Model = MapModel<BTreeMap<K, V>>;
 }

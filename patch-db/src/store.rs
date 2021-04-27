@@ -14,10 +14,9 @@ use tokio::fs::File;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::sync::{Mutex, RwLock, RwLockWriteGuard};
 
-use crate::locker::Locker;
 use crate::patch::{diff, DiffPatch, Revision};
-use crate::transaction::Transaction;
 use crate::Error;
+use crate::{locker::Locker, PatchDbHandle};
 
 lazy_static! {
     static ref OPEN_STORES: Mutex<HashMap<PathBuf, Qutex<()>>> = Mutex::new(HashMap::new());
@@ -31,7 +30,7 @@ pub struct Store {
     revision: u64,
 }
 impl Store {
-    pub async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
+    pub(crate) async fn open<P: AsRef<Path>>(path: P) -> Result<Self, Error> {
         let (_lock, path) = {
             if !path.as_ref().exists() {
                 tokio::fs::File::create(path.as_ref()).await?;
@@ -123,13 +122,13 @@ impl Store {
         self.file.unlock(true).map_err(|e| e.1)?;
         Ok(())
     }
-    pub fn exists<S: AsRef<str>, V: SegList>(
+    pub(crate) fn exists<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
     ) -> Result<bool, Error> {
         Ok(ptr.get(self.get_data()?).unwrap_or(&Value::Null) != &Value::Null)
     }
-    pub fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(
+    pub(crate) fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
     ) -> Result<T, Error> {
@@ -137,10 +136,10 @@ impl Store {
             ptr.get(self.get_data()?).unwrap_or(&Value::Null).clone(),
         )?)
     }
-    pub fn dump(&self) -> Value {
+    pub(crate) fn dump(&self) -> Value {
         self.get_data().unwrap().clone()
     }
-    pub async fn put<T: Serialize + ?Sized, S: AsRef<str>, V: SegList>(
+    pub(crate) async fn put<T: Serialize + ?Sized, S: AsRef<str>, V: SegList>(
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
@@ -152,7 +151,7 @@ impl Store {
         patch.prepend(ptr);
         self.apply(patch).await
     }
-    pub async fn apply(&mut self, patch: DiffPatch) -> Result<Arc<Revision>, Error> {
+    pub(crate) async fn apply(&mut self, patch: DiffPatch) -> Result<Arc<Revision>, Error> {
         use tokio::io::AsyncWriteExt;
 
         self.check_cache_corrupted()?;
@@ -196,6 +195,9 @@ impl PatchDb {
             subscriber: Arc::new(subscriber),
         })
     }
+    pub async fn dump(&self) -> Value {
+        self.store.read().await.dump()
+    }
     pub async fn exists<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
@@ -235,12 +237,10 @@ impl PatchDb {
     pub fn subscribe(&self) -> Receiver<Arc<Revision>> {
         self.subscriber.subscribe()
     }
-    pub fn begin(&self) -> Transaction {
-        Transaction {
+    pub fn handle(&self) -> PatchDbHandle {
+        PatchDbHandle {
             db: self.clone(),
             locks: Vec::new(),
-            updates: DiffPatch::default(),
-            sub: self.subscribe(),
         }
     }
 }
