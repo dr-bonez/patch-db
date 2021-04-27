@@ -6,6 +6,7 @@ use tokio::sync::broadcast::error::TryRecvError;
 
 // note: inserting into an array (before another element) without proper locking can result in unexpected behaviour
 
+mod handle;
 mod locker;
 mod model;
 mod patch;
@@ -15,6 +16,7 @@ mod transaction;
 #[cfg(test)]
 mod test;
 
+pub use handle::{DbHandle, PatchDbHandle};
 pub use json_ptr;
 pub use locker::{LockType, Locker};
 pub use model::{
@@ -23,7 +25,7 @@ pub use model::{
 pub use patch::Revision;
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
-pub use transaction::{Checkpoint, SubTransaction, Transaction};
+pub use transaction::Transaction;
 
 #[derive(Error, Debug)]
 pub enum Error {

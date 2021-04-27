@@ -8,7 +8,7 @@ use serde_json::Value;
 use tokio::fs;
 use tokio::runtime::Builder;
 
-use crate as patch_db;
+use crate::{self as patch_db, DbHandle};
 
 async fn init_db(db_name: String) -> PatchDb {
     cleanup_db(&db_name).await;
@@ -54,7 +54,8 @@ async fn basic() {
 #[tokio::test]
 async fn transaction() {
     let db = init_db("test.db".to_string()).await;
-    let mut tx = db.begin();
+    let mut handle = db.handle();
+    let mut tx = handle.begin().await.unwrap();
     let ptr: JsonPointer = "/b/b".parse().unwrap();
     tx.put(&ptr, &(2 as usize)).await.unwrap();
     tx.put(&ptr, &(1 as usize)).await.unwrap();
