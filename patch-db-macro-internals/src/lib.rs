@@ -149,8 +149,13 @@ fn build_model_struct(
                     syn::parse2(quote! { patch_db::Model::<#ty> }).unwrap()
                 };
                 return quote! {
-                    #[derive(Debug, Clone)]
+                    #[derive(Debug)]
                     #model_vis struct #model_name(#inner_model);
+                    impl std::clone::Clone for #model_name {
+                        fn clone(&self) -> Self {
+                            #model_name(self.0.clone())
+                        }
+                    }
                     impl core::ops::Deref for #model_name {
                         type Target = #inner_model;
                         fn deref(&self) -> &Self::Target {
@@ -227,8 +232,13 @@ fn build_model_struct(
         Fields::Unit => (),
     }
     quote! {
-        #[derive(Debug, Clone)]
+        #[derive(Debug)]
         #model_vis struct #model_name(patch_db::Model<#base_name>);
+        impl std::clone::Clone for #model_name {
+            fn clone(&self) -> Self {
+                #model_name(self.0.clone())
+            }
+        }
         impl core::ops::Deref for #model_name {
             type Target = patch_db::Model<#base_name>;
             fn deref(&self) -> &Self::Target {
