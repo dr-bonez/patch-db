@@ -60,7 +60,7 @@ where
     }
 
     pub async fn get<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelData<T>, Error> {
-        db.lock(&self.ptr, LockType::Read).await;
+        self.lock(db, LockType::Read).await;
         Ok(ModelData(db.get(&self.ptr).await?))
     }
 
@@ -133,10 +133,14 @@ where
 }
 
 pub trait HasModel: Serialize + for<'de> Deserialize<'de> {
-    type Model: From<JsonPointer> + AsRef<JsonPointer> + Into<JsonPointer> + From<Model<Self>>;
+    type Model: From<JsonPointer>
+        + AsRef<JsonPointer>
+        + Into<JsonPointer>
+        + From<Model<Self>>
+        + Clone;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct BoxModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> Deref for BoxModel<T> {
     type Target = T::Model;
@@ -167,11 +171,19 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> From<BoxModel<T>> for 
         model.0.into()
     }
 }
+impl<T> std::clone::Clone for BoxModel<T>
+where
+    T: HasModel + Serialize + for<'de> Deserialize<'de>,
+{
+    fn clone(&self) -> Self {
+        BoxModel(self.0.clone())
+    }
+}
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
     type Model = BoxModel<T>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
     pub async fn exists<Db: DbHandle>(&self, db: &mut Db) -> Result<bool, Error> {
@@ -223,11 +235,19 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> AsRef<JsonPointer> for
         self.0.as_ref()
     }
 }
+impl<T> std::clone::Clone for OptionModel<T>
+where
+    T: HasModel + Serialize + for<'de> Deserialize<'de>,
+{
+    fn clone(&self) -> Self {
+        OptionModel(self.0.clone())
+    }
+}
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Option<T> {
     type Model = OptionModel<T>;
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct VecModel<T: Serialize + for<'de> Deserialize<'de>>(Model<Vec<T>>);
 impl<T: Serialize + for<'de> Deserialize<'de>> Deref for VecModel<T> {
     type Target = Model<Vec<T>>;
@@ -238,6 +258,11 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Deref for VecModel<T> {
 impl<T: Serialize + for<'de> Deserialize<'de>> VecModel<T> {
     pub fn idx(&self, idx: usize) -> Model<Option<T>> {
         self.child(&format!("{}", idx))
+    }
+}
+impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> VecModel<T> {
+    pub fn idx_model(&self, idx: usize) -> OptionModel<T> {
+        self.child(&format!("{}", idx)).into()
     }
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> From<Model<Vec<T>>> for VecModel<T> {
@@ -261,6 +286,14 @@ where
 {
     fn as_ref(&self) -> &JsonPointer {
         self.0.as_ref()
+    }
+}
+impl<T> std::clone::Clone for VecModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de>,
+{
+    fn clone(&self) -> Self {
+        VecModel(self.0.clone())
     }
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> HasModel for Vec<T> {
@@ -288,7 +321,7 @@ impl<K: AsRef<str> + Ord, V> Map for BTreeMap<K, V> {
     }
 }
 
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct MapModel<T>(Model<T>)
 where
     T: Serialize + for<'de> Deserialize<'de> + Map,
@@ -301,6 +334,15 @@ where
     type Target = Model<T>;
     fn deref(&self) -> &Self::Target {
         &self.0
+    }
+}
+impl<T> std::clone::Clone for MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
+    fn clone(&self) -> Self {
+        MapModel(self.0.clone())
     }
 }
 impl<T> MapModel<T>
