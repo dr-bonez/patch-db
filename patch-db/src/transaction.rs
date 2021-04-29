@@ -26,11 +26,11 @@ pub struct Transaction<Parent: DbHandle> {
     pub(crate) sub: Receiver<Arc<Revision>>,
 }
 impl Transaction<&mut PatchDbHandle> {
-    pub async fn commit(mut self) -> Result<Arc<Revision>, Error> {
+    pub async fn commit(mut self, expire_id: Option<String>) -> Result<Arc<Revision>, Error> {
         let store_lock = self.parent.store();
         let store = store_lock.read().await;
         self.rebase()?;
-        let rev = self.parent.db.apply(self.updates, None).await?;
+        let rev = self.parent.db.apply(self.updates, expire_id, None).await?;
         drop(store);
         Ok(rev)
     }
