@@ -143,15 +143,20 @@ impl Store {
         &mut self,
         ptr: &JsonPointer<S, V>,
         value: &T,
+        expire_id: Option<String>,
     ) -> Result<Arc<Revision>, Error> {
         let mut patch = diff(
             ptr.get(self.get_data()?).unwrap_or(&Value::Null),
             &serde_json::to_value(value)?,
         );
         patch.prepend(ptr);
-        self.apply(patch).await
+        self.apply(patch, expire_id).await
     }
-    pub(crate) async fn apply(&mut self, patch: DiffPatch) -> Result<Arc<Revision>, Error> {
+    pub(crate) async fn apply(
+        &mut self,
+        patch: DiffPatch,
+        expire_id: Option<String>,
+    ) -> Result<Arc<Revision>, Error> {
         use tokio::io::AsyncWriteExt;
 
         self.check_cache_corrupted()?;
@@ -173,7 +178,11 @@ impl Store {
 
         let id = self.revision;
         self.revision += 1;
-        let res = Arc::new(Revision { id, patch });
+        let res = Arc::new(Revision {
+            id,
+            patch,
+            expire_id,
+        });
 
         Ok(res)
     }
@@ -214,15 +223,17 @@ impl PatchDb {
         &self,
         ptr: &JsonPointer<S, V>,
         value: &T,
+        expire_id: Option<String>,
     ) -> Result<Arc<Revision>, Error> {
         let mut store = self.store.write().await;
-        let rev = store.put(ptr, value).await?;
+        let rev = store.put(ptr, value, expire_id).await?;
         self.subscriber.send(rev.clone()).unwrap_or_default();
         Ok(rev)
     }
     pub async fn apply(
         &self,
         patch: DiffPatch,
+        expire_id: Option<String>,
         store_write_lock: Option<RwLockWriteGuard<'_, Store>>,
     ) -> Result<Arc<Revision>, Error> {
         let mut store = if let Some(store_write_lock) = store_write_lock {
@@ -230,7 +241,7 @@ impl PatchDb {
         } else {
             self.store.write().await
         };
-        let rev = store.apply(patch).await?;
+        let rev = store.apply(patch, expire_id).await?;
         self.subscriber.send(rev.clone()).unwrap_or_default(); // ignore errors
         Ok(rev)
     }

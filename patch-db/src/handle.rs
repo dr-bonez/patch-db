@@ -194,11 +194,11 @@ impl DbHandle for PatchDbHandle {
         ptr: &JsonPointer<S, V>,
         value: &Value,
     ) -> Result<(), Error> {
-        self.db.put(ptr, value).await?;
+        self.db.put(ptr, value, None).await?;
         Ok(())
     }
     async fn apply(&mut self, patch: DiffPatch) -> Result<(), Error> {
-        self.db.apply(patch, None).await?;
+        self.db.apply(patch, None, None).await?;
         Ok(())
     }
     async fn lock<S: AsRef<str> + Clone + Send + Sync, V: SegList + Clone + Send + Sync>(
@@ -241,7 +241,7 @@ impl DbHandle for PatchDbHandle {
         ptr: &JsonPointer<S, V>,
         value: &T,
     ) -> Result<(), Error> {
-        self.db.put(ptr, value).await?;
+        self.db.put(ptr, value, None).await?;
         Ok(())
     }
 }
