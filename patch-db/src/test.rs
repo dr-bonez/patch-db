@@ -23,6 +23,7 @@ async fn init_db(db_name: String) -> PatchDb {
                 c: NewType(None),
             },
         },
+        None,
     )
     .await
     .unwrap();
@@ -34,7 +35,7 @@ async fn cleanup_db(db_name: &str) {
 }
 
 async fn put_string_into_root(db: PatchDb, s: String) -> Arc<Revision> {
-    db.put(&JsonPointer::<&'static str>::default(), &s)
+    db.put(&JsonPointer::<&'static str>::default(), &s, None)
         .await
         .unwrap()
 }
@@ -45,7 +46,7 @@ async fn basic() {
     let ptr: JsonPointer = "/b/b".parse().unwrap();
     let mut get_res: Value = db.get(&ptr).await.unwrap();
     assert_eq!(get_res, 1);
-    db.put(&ptr, "hello").await.unwrap();
+    db.put(&ptr, "hello", None).await.unwrap();
     get_res = db.get(&ptr).await.unwrap();
     assert_eq!(get_res, "hello");
     cleanup_db("test.db").await;
@@ -59,7 +60,7 @@ async fn transaction() {
     let ptr: JsonPointer = "/b/b".parse().unwrap();
     tx.put(&ptr, &(2 as usize)).await.unwrap();
     tx.put(&ptr, &(1 as usize)).await.unwrap();
-    let _res = tx.commit().await.unwrap();
+    let _res = tx.commit(None).await.unwrap();
     println!("res = {:?}", _res);
     cleanup_db("test.db").await;
 }

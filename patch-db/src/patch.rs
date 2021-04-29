@@ -9,6 +9,7 @@ use serde_json::Value;
 pub struct Revision {
     pub id: u64,
     pub patch: DiffPatch,
+    pub expire_id: Option<String>,
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
