@@ -247,7 +247,7 @@ fn build_model_struct(
         }
         impl #model_name {
             #(
-                pub fn #child_fn_name(&self) -> #child_model {
+                pub fn #child_fn_name(self) -> #child_model {
                     self.0.child(#child_path).into()
                 }
             )*

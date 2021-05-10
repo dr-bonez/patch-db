@@ -3,6 +3,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
+use hashlink::LinkedHashSet;
 use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -75,8 +76,8 @@ where
         })
     }
 
-    pub fn child<C: Serialize + for<'de> Deserialize<'de>>(&self, index: &str) -> Model<C> {
-        let mut ptr = self.ptr.clone();
+    pub fn child<C: Serialize + for<'de> Deserialize<'de>>(self, index: &str) -> Model<C> {
+        let mut ptr = self.ptr;
         ptr.push_end(index);
         Model {
             ptr,
@@ -133,11 +134,18 @@ where
 }
 
 pub trait HasModel: Serialize + for<'de> Deserialize<'de> {
-    type Model: From<JsonPointer>
-        + AsRef<JsonPointer>
-        + Into<JsonPointer>
-        + From<Model<Self>>
-        + Clone;
+    type Model: ModelFor<Self>;
+}
+
+pub trait ModelFor<T: Serialize + for<'de> Deserialize<'de>>:
+    From<JsonPointer> + AsRef<JsonPointer> + Into<JsonPointer> + From<Model<T>> + Clone
+{
+}
+impl<
+        T: Serialize + for<'de> Deserialize<'de>,
+        U: From<JsonPointer> + AsRef<JsonPointer> + Into<JsonPointer> + From<Model<T>> + Clone,
+    > ModelFor<T> for U
+{
 }
 
 #[derive(Debug)]
@@ -186,9 +194,51 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> HasModel for Box<T> {
 #[derive(Debug)]
 pub struct OptionModel<T: HasModel + Serialize + for<'de> Deserialize<'de>>(T::Model);
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
+    pub async fn lock<Db: DbHandle>(&self, db: &mut Db, lock: LockType) {
+        db.lock(self.0.as_ref(), lock).await
+    }
+
+    pub async fn get<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelData<Option<T>>, Error> {
+        self.lock(db, LockType::Read).await;
+        Ok(ModelData(db.get(self.0.as_ref()).await?))
+    }
+
+    pub async fn get_mut<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelDataMut<T>, Error> {
+        self.lock(db, LockType::Write).await;
+        let original = db.get_value(self.0.as_ref(), None).await?;
+        let current = serde_json::from_value(original.clone())?;
+        Ok(ModelDataMut {
+            original,
+            current,
+            ptr: self.0.clone().into(),
+        })
+    }
+
     pub async fn exists<Db: DbHandle>(&self, db: &mut Db) -> Result<bool, Error> {
-        db.lock(self.as_ref(), LockType::Read).await;
+        self.lock(db, LockType::Read).await;
         Ok(db.exists(&self.as_ref(), None).await?)
+    }
+
+    pub fn map<
+        F: FnOnce(T::Model) -> V,
+        U: Serialize + for<'de> Deserialize<'de>,
+        V: ModelFor<U>,
+    >(
+        self,
+        f: F,
+    ) -> Model<Option<U>> {
+        Into::<JsonPointer>::into(f(self.0)).into()
+    }
+
+    pub fn and_then<
+        F: FnOnce(T::Model) -> V,
+        U: Serialize + for<'de> Deserialize<'de>,
+        V: ModelFor<Option<U>>,
+    >(
+        self,
+        f: F,
+    ) -> V {
+        Into::<JsonPointer>::into(f(self.0)).into()
     }
 
     pub async fn check<Db: DbHandle>(self, db: &mut Db) -> Result<Option<T::Model>, Error> {
@@ -197,6 +247,14 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         } else {
             None
         })
+    }
+
+    pub async fn expect<Db: DbHandle>(self, db: &mut Db) -> Result<T::Model, Error> {
+        if self.exists(db).await? {
+            Ok(self.0)
+        } else {
+            Err(Error::NodeDoesNotExist(self.0.into()))
+        }
     }
 
     pub async fn delete<Db: DbHandle>(&self, db: &mut Db) -> Result<(), Error> {
@@ -256,13 +314,13 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Deref for VecModel<T> {
     }
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> VecModel<T> {
-    pub fn idx(&self, idx: usize) -> Model<Option<T>> {
-        self.child(&format!("{}", idx))
+    pub fn idx(self, idx: usize) -> Model<Option<T>> {
+        self.0.child(&format!("{}", idx))
     }
 }
 impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> VecModel<T> {
-    pub fn idx_model(&self, idx: usize) -> OptionModel<T> {
-        self.child(&format!("{}", idx)).into()
+    pub fn idx_model(self, idx: usize) -> OptionModel<T> {
+        self.0.child(&format!("{}", idx)).into()
     }
 }
 impl<T: Serialize + for<'de> Deserialize<'de>> From<Model<Vec<T>>> for VecModel<T> {
@@ -350,8 +408,23 @@ where
     T: Serialize + for<'de> Deserialize<'de> + Map,
     T::Value: Serialize + for<'de> Deserialize<'de>,
 {
-    pub fn idx(&self, idx: &<T as Map>::Key) -> Model<Option<<T as Map>::Value>> {
-        self.child(idx.as_ref())
+    pub fn idx(self, idx: &<T as Map>::Key) -> Model<Option<<T as Map>::Value>> {
+        self.0.child(idx.as_ref())
+    }
+}
+impl<T> MapModel<T>
+where
+    T: Serialize + for<'de> Deserialize<'de> + Map,
+    T::Key: Hash + Eq + for<'de> Deserialize<'de>,
+    T::Value: Serialize + for<'de> Deserialize<'de>,
+{
+    pub async fn keys<Db: DbHandle>(&self, db: &mut Db) -> Result<LinkedHashSet<T::Key>, Error> {
+        db.lock(self.as_ref(), LockType::Read).await;
+        let set = db.keys(self.as_ref(), None).await?;
+        Ok(set
+            .into_iter()
+            .map(|s| serde_json::from_value(Value::String(s)))
+            .collect::<Result<_, _>>()?)
     }
 }
 impl<T> MapModel<T>
@@ -359,8 +432,8 @@ where
     T: Serialize + for<'de> Deserialize<'de> + Map,
     T::Value: Serialize + for<'de> Deserialize<'de> + HasModel,
 {
-    pub fn idx_model(&self, idx: &<T as Map>::Key) -> OptionModel<<T as Map>::Value> {
-        self.child(idx.as_ref()).into()
+    pub fn idx_model(self, idx: &<T as Map>::Key) -> OptionModel<<T as Map>::Value> {
+        self.0.child(idx.as_ref()).into()
     }
 }
 impl<T> From<Model<T>> for MapModel<T>

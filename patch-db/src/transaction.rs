@@ -1,6 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
+use hashlink::LinkedHashSet;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -98,6 +99,23 @@ impl<Parent: DbHandle + Send + Sync> DbHandle for Transaction<Parent> {
             self.parent.exists(ptr, Some(store)).await?
         };
         Ok(self.updates.for_path(ptr).exists().unwrap_or(exists))
+    }
+    async fn keys<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
+        &mut self,
+        ptr: &JsonPointer<S, V>,
+        store_read_lock: Option<RwLockReadGuard<'_, Store>>,
+    ) -> Result<LinkedHashSet<String>, Error> {
+        let keys = {
+            let store_lock = self.parent.store();
+            let store = if let Some(store_read_lock) = store_read_lock {
+                store_read_lock
+            } else {
+                store_lock.read().await
+            };
+            self.rebase()?;
+            self.parent.keys(ptr, Some(store)).await?
+        };
+        Ok(self.updates.for_path(ptr).keys(keys))
     }
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
