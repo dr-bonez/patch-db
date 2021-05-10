@@ -1,6 +1,7 @@
 use std::io::Error as IOError;
 use std::sync::Arc;
 
+use json_ptr::JsonPointer;
 use thiserror::Error;
 use tokio::sync::broadcast::error::TryRecvError;
 
@@ -47,4 +48,6 @@ pub enum Error {
     CacheCorrupted(Arc<IOError>),
     #[error("Subscriber Error: {0}")]
     Subscriber(#[from] TryRecvError),
+    #[error("Node Does Not Exist: {0}")]
+    NodeDoesNotExist(JsonPointer),
 }

@@ -1,5 +1,6 @@
 use std::ops::Deref;
 
+use hashlink::LinkedHashSet;
 use json_patch::{AddOperation, Patch, PatchOperation, RemoveOperation, ReplaceOperation};
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
@@ -175,6 +176,26 @@ impl DiffPatch {
             }
         }
         res
+    }
+
+    pub fn keys(&self, mut keys: LinkedHashSet<String>) -> LinkedHashSet<String> {
+        for op in &(self.0).0 {
+            match op {
+                PatchOperation::Add(a) => {
+                    if a.path.len() == 1 {
+                        keys.insert(a.path.get_segment(0).unwrap().to_owned());
+                    }
+                }
+                PatchOperation::Replace(_) => (),
+                PatchOperation::Remove(a) => {
+                    if a.path.len() == 1 {
+                        keys.remove(a.path.get_segment(0).unwrap());
+                    }
+                }
+                _ => unreachable!(),
+            }
+        }
+        keys
     }
 }
 impl Default for DiffPatch {
