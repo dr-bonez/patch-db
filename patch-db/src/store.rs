@@ -5,6 +5,7 @@ use std::path::{Path, PathBuf};
 use std::sync::Arc;
 
 use fd_lock_rs::FdLock;
+use hashlink::LinkedHashSet;
 use json_ptr::{JsonPointer, SegList};
 use lazy_static::lazy_static;
 use qutex_2::{Guard, Qutex};
@@ -128,6 +129,15 @@ impl Store {
     ) -> Result<bool, Error> {
         Ok(ptr.get(self.get_data()?).unwrap_or(&Value::Null) != &Value::Null)
     }
+    pub(crate) fn keys<S: AsRef<str>, V: SegList>(
+        &self,
+        ptr: &JsonPointer<S, V>,
+    ) -> Result<LinkedHashSet<String>, Error> {
+        Ok(match ptr.get(self.get_data()?).unwrap_or(&Value::Null) {
+            Value::Object(o) => o.keys().cloned().collect(),
+            _ => LinkedHashSet::new(),
+        })
+    }
     pub(crate) fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
@@ -212,6 +222,12 @@ impl PatchDb {
         ptr: &JsonPointer<S, V>,
     ) -> Result<bool, Error> {
         self.store.read().await.exists(ptr)
+    }
+    pub async fn keys<S: AsRef<str>, V: SegList>(
+        &self,
+        ptr: &JsonPointer<S, V>,
+    ) -> Result<LinkedHashSet<String>, Error> {
+        self.store.read().await.keys(ptr)
     }
     pub async fn get<T: for<'de> Deserialize<'de>, S: AsRef<str>, V: SegList>(
         &self,
