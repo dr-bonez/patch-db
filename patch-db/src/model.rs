@@ -11,6 +11,7 @@ use serde_json::Value;
 use crate::Error;
 use crate::{locker::LockType, DbHandle};
 
+#[derive(Debug)]
 pub struct ModelData<T: Serialize + for<'de> Deserialize<'de>>(T);
 impl<T: Serialize + for<'de> Deserialize<'de>> Deref for ModelData<T> {
     type Target = T;
@@ -18,7 +19,13 @@ impl<T: Serialize + for<'de> Deserialize<'de>> Deref for ModelData<T> {
         &self.0
     }
 }
+impl<T: Serialize + for<'de> Deserialize<'de>> ModelData<T> {
+    pub fn to_owned(self) -> T {
+        self.0
+    }
+}
 
+#[derive(Debug)]
 pub struct ModelDataMut<T: Serialize + for<'de> Deserialize<'de>> {
     original: Value,
     current: T,

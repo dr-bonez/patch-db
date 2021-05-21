@@ -35,6 +35,12 @@ impl Transaction<&mut PatchDbHandle> {
         drop(store);
         Ok(rev)
     }
+    pub async fn abort(mut self) -> Result<DiffPatch, Error> {
+        let store_lock = self.parent.store();
+        let _store = store_lock.read().await;
+        self.rebase()?;
+        Ok(self.updates)
+    }
 }
 impl<Parent: DbHandle + Send + Sync> Transaction<Parent> {
     pub async fn save(mut self) -> Result<(), Error> {
