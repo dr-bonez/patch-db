@@ -23,7 +23,7 @@ pub use locker::{LockType, Locker};
 pub use model::{
     BoxModel, HasModel, Map, MapModel, Model, ModelData, ModelDataMut, OptionModel, VecModel,
 };
-pub use patch::Revision;
+pub use patch::{Revision, DiffPatch};
 pub use patch_db_macro::HasModel;
 pub use store::{PatchDb, Store};
 pub use transaction::Transaction;
