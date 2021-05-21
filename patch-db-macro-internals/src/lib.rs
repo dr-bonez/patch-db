@@ -1,7 +1,7 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 use syn::{
-    Data, DataEnum, DataStruct, DeriveInput, Fields, Ident, Lit, LitStr, MetaNameValue, Type,
+    Data, DataEnum, DataStruct, DeriveInput, Fields, Ident, Lit, LitStr, MetaNameValue, Path, Type,
 };
 
 pub fn build_model(item: &DeriveInput) -> TokenStream {
@@ -43,7 +43,7 @@ fn build_model_struct(
     let model_vis = &base.vis;
     let mut child_fn_name: Vec<Ident> = Vec::new();
     let mut child_model: Vec<Type> = Vec::new();
-    let mut child_path: Vec<LitStr> = Vec::new();
+    let mut child_path: Vec<Option<LitStr>> = Vec::new();
     let serde_rename_all = base
         .attrs
         .iter()
@@ -81,47 +81,66 @@ fn build_model_struct(
                 } else {
                     child_model.push(syn::parse2(quote! { patch_db::Model<#ty> }).unwrap());
                 }
-                let serde_rename = field
+                if field
                     .attrs
                     .iter()
                     .filter(|attr| attr.path.is_ident("serde"))
-                    .filter_map(|attr| syn::parse2::<MetaNameValue>(attr.tokens.clone()).ok())
-                    .filter(|nv| nv.path.is_ident("rename"))
-                    .find_map(|nv| match nv.lit {
-                        Lit::Str(s) => Some(s),
-                        _ => None,
-                    });
-                match (serde_rename, serde_rename_all.as_ref().map(|s| s.as_str())) {
-                    (Some(a), _) => child_path.push(a),
-                    (None, Some("lowercase")) => child_path.push(LitStr::new(
-                        &heck::CamelCase::to_camel_case(ident.to_string().as_str()).to_lowercase(),
-                        ident.span(),
-                    )),
-                    (None, Some("UPPERCASE")) => child_path.push(LitStr::new(
-                        &heck::CamelCase::to_camel_case(ident.to_string().as_str()).to_uppercase(),
-                        ident.span(),
-                    )),
-                    (None, Some("PascalCase")) => child_path.push(LitStr::new(
-                        &heck::CamelCase::to_camel_case(ident.to_string().as_str()),
-                        ident.span(),
-                    )),
-                    (None, Some("camelCase")) => child_path.push(LitStr::new(
-                        &heck::MixedCase::to_mixed_case(ident.to_string().as_str()),
-                        ident.span(),
-                    )),
-                    (None, Some("SCREAMING_SNAKE_CASE")) => child_path.push(LitStr::new(
-                        &heck::ShoutySnakeCase::to_shouty_snake_case(ident.to_string().as_str()),
-                        ident.span(),
-                    )),
-                    (None, Some("kebab-case")) => child_path.push(LitStr::new(
-                        &heck::KebabCase::to_kebab_case(ident.to_string().as_str()),
-                        ident.span(),
-                    )),
-                    (None, Some("SCREAMING-KEBAB-CASE")) => child_path.push(LitStr::new(
-                        &heck::ShoutyKebabCase::to_shouty_kebab_case(ident.to_string().as_str()),
-                        ident.span(),
-                    )),
-                    _ => child_path.push(LitStr::new(&ident.to_string(), ident.span())),
+                    .filter_map(|attr| syn::parse2::<Path>(attr.tokens.clone()).ok())
+                    .any(|path| path.is_ident("flatten"))
+                {
+                    child_path.push(None);
+                } else {
+                    let serde_rename = field
+                        .attrs
+                        .iter()
+                        .filter(|attr| attr.path.is_ident("serde"))
+                        .filter_map(|attr| syn::parse2::<MetaNameValue>(attr.tokens.clone()).ok())
+                        .filter(|nv| nv.path.is_ident("rename"))
+                        .find_map(|nv| match nv.lit {
+                            Lit::Str(s) => Some(s),
+                            _ => None,
+                        });
+
+                    child_path.push(Some(
+                        match (serde_rename, serde_rename_all.as_ref().map(|s| s.as_str())) {
+                            (Some(a), _) => a,
+                            (None, Some("lowercase")) => LitStr::new(
+                                &heck::CamelCase::to_camel_case(ident.to_string().as_str())
+                                    .to_lowercase(),
+                                ident.span(),
+                            ),
+                            (None, Some("UPPERCASE")) => LitStr::new(
+                                &heck::CamelCase::to_camel_case(ident.to_string().as_str())
+                                    .to_uppercase(),
+                                ident.span(),
+                            ),
+                            (None, Some("PascalCase")) => LitStr::new(
+                                &heck::CamelCase::to_camel_case(ident.to_string().as_str()),
+                                ident.span(),
+                            ),
+                            (None, Some("camelCase")) => LitStr::new(
+                                &heck::MixedCase::to_mixed_case(ident.to_string().as_str()),
+                                ident.span(),
+                            ),
+                            (None, Some("SCREAMING_SNAKE_CASE")) => LitStr::new(
+                                &heck::ShoutySnakeCase::to_shouty_snake_case(
+                                    ident.to_string().as_str(),
+                                ),
+                                ident.span(),
+                            ),
+                            (None, Some("kebab-case")) => LitStr::new(
+                                &heck::KebabCase::to_kebab_case(ident.to_string().as_str()),
+                                ident.span(),
+                            ),
+                            (None, Some("SCREAMING-KEBAB-CASE")) => LitStr::new(
+                                &heck::ShoutyKebabCase::to_shouty_kebab_case(
+                                    ident.to_string().as_str(),
+                                ),
+                                ident.span(),
+                            ),
+                            _ => LitStr::new(&ident.to_string(), ident.span()),
+                        },
+                    ));
                 }
             }
         }
@@ -222,15 +241,27 @@ fn build_model_struct(
                         child_model.push(syn::parse2(quote! { patch_db::Model<#ty> }).unwrap());
                     }
                     // TODO: serde rename for tuple structs?
-                    child_path.push(LitStr::new(
+                    // TODO: serde flatten for tuple structs?
+                    child_path.push(Some(LitStr::new(
                         &format!("{}", i),
                         proc_macro2::Span::call_site(),
-                    ));
+                    )));
                 }
             }
         }
         Fields::Unit => (),
     }
+    let child_path_expr = child_path.iter().map(|child_path| {
+        if let Some(child_path) = child_path {
+            quote! {
+                self.0.child(#child_path).into()
+            }
+        } else {
+            quote! {
+                self.0.into()
+            }
+        }
+    });
     quote! {
         #[derive(Debug)]
         #model_vis struct #model_name(patch_db::Model<#base_name>);
@@ -248,7 +279,7 @@ fn build_model_struct(
         impl #model_name {
             #(
                 pub fn #child_fn_name(self) -> #child_model {
-                    self.0.child(#child_path).into()
+                    #child_path_expr
                 }
             )*
         }

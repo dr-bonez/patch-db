@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use futures::{future::BoxFuture, FutureExt};
 use json_ptr::{JsonPointer, SegList};
 use qutex_2::{QrwLock, ReadGuard, WriteGuard};
 use tokio::sync::Mutex;
@@ -67,6 +68,15 @@ impl Locker {
     pub fn new() -> Self {
         Locker(QrwLock::new(HashMap::new()))
     }
+    fn lock_root_read<'a>(guard: &'a ReadGuard<HashMap<String, Locker>>) -> BoxFuture<'a, ()> {
+        async move {
+            for (_, v) in &**guard {
+                let g = v.0.clone().read().await.unwrap();
+                Self::lock_root_read(&g).await;
+            }
+        }
+        .boxed()
+    }
     pub async fn lock_read<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
@@ -83,7 +93,9 @@ impl Locker {
             };
             lock = Some(new_lock);
         }
-        lock.unwrap()
+        let res = lock.unwrap();
+        Self::lock_root_read(&res);
+        res
     }
     pub(crate) async fn add_read_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
         &self,
@@ -105,6 +117,15 @@ impl Locker {
             LockerGuard::Read(self.lock_read(ptr).await.into()),
         ));
     }
+    fn lock_root_write<'a>(guard: &'a WriteGuard<HashMap<String, Locker>>) -> BoxFuture<'a, ()> {
+        async move {
+            for (_, v) in &**guard {
+                let g = v.0.clone().write().await.unwrap();
+                Self::lock_root_write(&g).await;
+            }
+        }
+        .boxed()
+    }
     pub async fn lock_write<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
@@ -119,7 +140,9 @@ impl Locker {
             };
             lock = new_lock;
         }
-        lock
+        let res = lock;
+        Self::lock_root_write(&res);
+        res
     }
     pub(crate) async fn add_write_lock<S: AsRef<str> + Clone, V: SegList + Clone>(
         &self,
