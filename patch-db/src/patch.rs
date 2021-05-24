@@ -1,6 +1,6 @@
 use std::ops::Deref;
 
-use hashlink::LinkedHashSet;
+use indexmap::IndexSet;
 use json_patch::{AddOperation, Patch, PatchOperation, RemoveOperation, ReplaceOperation};
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
@@ -178,7 +178,7 @@ impl DiffPatch {
         res
     }
 
-    pub fn keys(&self, mut keys: LinkedHashSet<String>) -> LinkedHashSet<String> {
+    pub fn keys(&self, mut keys: IndexSet<String>) -> IndexSet<String> {
         for op in &(self.0).0 {
             match op {
                 PatchOperation::Add(a) => {
