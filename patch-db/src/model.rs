@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use hashlink::LinkedHashSet;
+use indexmap::IndexSet;
 use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -425,7 +425,7 @@ where
     T::Key: Hash + Eq + for<'de> Deserialize<'de>,
     T::Value: Serialize + for<'de> Deserialize<'de>,
 {
-    pub async fn keys<Db: DbHandle>(&self, db: &mut Db) -> Result<LinkedHashSet<T::Key>, Error> {
+    pub async fn keys<Db: DbHandle>(&self, db: &mut Db) -> Result<IndexSet<T::Key>, Error> {
         db.lock(self.as_ref(), LockType::Read).await;
         let set = db.keys(self.as_ref(), None).await?;
         Ok(set
