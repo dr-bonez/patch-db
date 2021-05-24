@@ -1,7 +1,7 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use hashlink::LinkedHashSet;
+use indexmap::IndexSet;
 use json_ptr::{JsonPointer, SegList};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -29,7 +29,7 @@ pub trait DbHandle: Sized + Send + Sync {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<LinkedHashSet<String>, Error>;
+    ) -> Result<IndexSet<String>, Error>;
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
         &mut self,
         ptr: &JsonPointer<S, V>,
@@ -103,7 +103,7 @@ impl<Handle: DbHandle + Send + Sync> DbHandle for &mut Handle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<LinkedHashSet<String>, Error> {
+    ) -> Result<IndexSet<String>, Error> {
         (*self).keys(ptr, store_read_lock).await
     }
     async fn get_value<S: AsRef<str> + Send + Sync, V: SegList + Send + Sync>(
@@ -195,7 +195,7 @@ impl DbHandle for PatchDbHandle {
         &mut self,
         ptr: &JsonPointer<S, V>,
         store_read_lock: Option<RwLockReadGuard<'_, Store>>,
-    ) -> Result<LinkedHashSet<String>, Error> {
+    ) -> Result<IndexSet<String>, Error> {
         if let Some(lock) = store_read_lock {
             lock.keys(ptr)
         } else {
