@@ -8,7 +8,7 @@ use fd_lock_rs::FdLock;
 use indexmap::IndexSet;
 use json_ptr::{JsonPointer, SegList};
 use lazy_static::lazy_static;
-use qutex_2::{Guard, Qutex};
+use qutex::{Guard, Qutex};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use tokio::fs::File;
