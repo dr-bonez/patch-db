@@ -3,7 +3,7 @@ use std::sync::Arc;
 
 use futures::{future::BoxFuture, FutureExt};
 use json_ptr::{JsonPointer, SegList};
-use qutex_2::{QrwLock, ReadGuard, WriteGuard};
+use qutex::{QrwLock, ReadGuard, WriteGuard};
 use tokio::sync::Mutex;
 
 #[derive(Debug, Clone, Copy)]
