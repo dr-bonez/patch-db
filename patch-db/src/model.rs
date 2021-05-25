@@ -3,7 +3,7 @@ use std::hash::Hash;
 use std::marker::PhantomData;
 use std::ops::{Deref, DerefMut};
 
-use indexmap::IndexSet;
+use indexmap::{IndexMap, IndexSet};
 use json_ptr::JsonPointer;
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
@@ -385,6 +385,13 @@ impl<K: AsRef<str> + Ord, V> Map for BTreeMap<K, V> {
         self.get(key)
     }
 }
+impl<K: AsRef<str> + Eq + Hash, V> Map for IndexMap<K, V> {
+    type Key = K;
+    type Value = V;
+    fn get(&self, key: &Self::Key) -> Option<&Self::Value> {
+        IndexMap::get(self, key)
+    }
+}
 
 #[derive(Debug)]
 pub struct MapModel<T>(Model<T>)
@@ -492,4 +499,11 @@ where
     V: Serialize + for<'de> Deserialize<'de>,
 {
     type Model = MapModel<BTreeMap<K, V>>;
+}
+impl<K, V> HasModel for IndexMap<K, V>
+where
+    K: Serialize + for<'de> Deserialize<'de> + Hash + Eq + AsRef<str>,
+    V: Serialize + for<'de> Deserialize<'de>,
+{
+    type Model = MapModel<IndexMap<K, V>>;
 }
