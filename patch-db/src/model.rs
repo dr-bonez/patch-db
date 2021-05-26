@@ -210,7 +210,10 @@ impl<T: HasModel + Serialize + for<'de> Deserialize<'de>> OptionModel<T> {
         Ok(ModelData(db.get(self.0.as_ref()).await?))
     }
 
-    pub async fn get_mut<Db: DbHandle>(&self, db: &mut Db) -> Result<ModelDataMut<T>, Error> {
+    pub async fn get_mut<Db: DbHandle>(
+        &self,
+        db: &mut Db,
+    ) -> Result<ModelDataMut<Option<T>>, Error> {
         self.lock(db, LockType::Write).await;
         let original = db.get_value(self.0.as_ref(), None).await?;
         let current = serde_json::from_value(original.clone())?;
