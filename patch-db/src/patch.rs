@@ -15,6 +15,13 @@ pub struct Revision {
 }
 
 #[derive(Debug, Clone, Deserialize, Serialize)]
+#[serde(rename_all = "kebab-case")]
+pub struct Dump {
+    pub id: u64,
+    pub value: Value,
+}
+
+#[derive(Debug, Clone, Deserialize, Serialize)]
 pub struct DiffPatch(Patch);
 impl DiffPatch {
     pub fn prepend<S: AsRef<str>, V: SegList>(&mut self, ptr: &JsonPointer<S, V>) {
