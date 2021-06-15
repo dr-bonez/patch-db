@@ -1,0 +1,35 @@
+{
+  "name": "patch-db",
+  "version": "1.0.0",
+  "description": "observable db based on json-patch",
+  "author": "Start9 Labs, Inc",
+  "license": "MIT",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc",
+    "test": "mocha -r ts-node/register tests/**/*.test.ts"
+  },
+  "dependencies": {
+    "fast-json-patch": "^3.0.0-1",
+    "jsonpointer": "^4.1.0",
+    "mobx": "^6.1.4",
+    "mobx-utils": "^6.0.3",
+    "rxjs": "^6.6.3",
+    "sorted-btree": "^1.5.0",
+    "uuid": "^8.3.2"
+  },
+  "devDependencies": {
+    "@types/chai": "^4.2.14",
+    "@types/chai-string": "^1.4.2",
+    "@types/mocha": "^8.2.0",
+    "@types/node": "^15.0.0",
+    "@types/uuid": "^8.3.0",
+    "chai": "^4.2.0",
+    "chai-string": "^1.5.0",
+    "mocha": "^8.2.1",
+    "tslint": "^6.1.0",
+    "ts-node": "^9.1.1",
+    "typescript": "4.1.5"
+  }
+}
