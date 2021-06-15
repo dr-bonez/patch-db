@@ -15,7 +15,7 @@ use tokio::fs::File;
 use tokio::sync::broadcast::{Receiver, Sender};
 use tokio::sync::{Mutex, RwLock, RwLockWriteGuard};
 
-use crate::patch::{diff, DiffPatch, Revision};
+use crate::patch::{diff, DiffPatch, Dump, Revision};
 use crate::Error;
 use crate::{locker::Locker, PatchDbHandle};
 
@@ -146,8 +146,11 @@ impl Store {
             ptr.get(self.get_data()?).unwrap_or(&Value::Null).clone(),
         )?)
     }
-    pub(crate) fn dump(&self) -> Value {
-        self.get_data().unwrap().clone()
+    pub(crate) fn dump(&self) -> Dump {
+        Dump {
+            id: self.revision,
+            value: self.get_data().unwrap().clone(),
+        }
     }
     pub(crate) async fn put<T: Serialize + ?Sized, S: AsRef<str>, V: SegList>(
         &mut self,
@@ -214,7 +217,7 @@ impl PatchDb {
             subscriber: Arc::new(subscriber),
         })
     }
-    pub async fn dump(&self) -> Value {
+    pub async fn dump(&self) -> Dump {
         self.store.read().await.dump()
     }
     pub async fn exists<S: AsRef<str>, V: SegList>(
