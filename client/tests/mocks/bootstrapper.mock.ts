@@ -18,9 +18,4 @@ export class MockBootstrapper<T> implements Bootstrapper<T> {
     this.sequence = cache.sequence
     this.data = cache.data
   }
-
-  async clear (): Promise<void> {
-    this.sequence = 0
-    this.data = { } as T
-  }
 }

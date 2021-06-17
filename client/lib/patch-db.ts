@@ -1,5 +1,5 @@
 import { EMPTY, from, merge, Observable, of, Subject, timer } from 'rxjs'
-import { catchError, concatMap, delay, finalize, map, skip, take, takeUntil, tap, throttleTime } from 'rxjs/operators'
+import { catchError, concatMap, debounce, debounceTime, delay, finalize, map, skip, take, takeUntil, tap, throttleTime } from 'rxjs/operators'
 import { Source } from './source/source'
 import { Dump, SequenceStore, Result, Revision } from './sequence-store'
 import { Store } from './store'
@@ -23,15 +23,14 @@ export class PatchDB<T extends object> {
 
     let sequence: number = 0
     let data: T = { } as T
-    if (bootstrapper) {
-      try {
-        const cache = await bootstrapper.init()
-        console.log('FROM CACHE', cache)
-        sequence = cache.sequence
-        data = cache.data
-      } catch (e) {
-        console.error('bootstrapper failed: ', e)
-      }
+    try {
+      const cache = await bootstrapper.init()
+      console.log('bootstrapped: ', cache)
+      sequence = cache.sequence
+      data = cache.data
+    } catch (e) {
+      // @TODO what to do if bootstrapper fails?
+      console.error('bootstrapper failed: ', e)
     }
 
     const store = new Store(data)
@@ -39,25 +38,24 @@ export class PatchDB<T extends object> {
     const sequenceStore = new SequenceStore(store, sequence)
 
     // update cache when sequenceStore emits, throttled
-    if (bootstrapper) {
-      sequenceStore.watch$().pipe(throttleTime(500), delay(500), skip(1)).subscribe(({ data, sequence }) => {
-        console.log('PATCHDB - update cache(): ', sequence, data)
-        bootstrapper.update({ sequence, data }).catch(e => {
-          console.error('Exception in updateCache: ', e)
-        })
+    sequenceStore.watch$().pipe(debounceTime(500), skip(1)).subscribe(({ data, sequence }) => {
+      console.log('PATCHDB - update cache(): ', sequence, data)
+      bootstrapper.update({ sequence, data }).catch(e => {
+        console.error('Exception in updateCache: ', e)
       })
-    }
+    })
 
     return new PatchDB(sources, http, sequenceStore, timeoutForMissingRevision)
   }
 
   sync$ (): Observable<void> {
     console.log('PATCHDB - sync$()')
+
     const sequence$ = this.sequenceStore.watch$().pipe(map(cache => cache.sequence))
     // nested concatMaps, as it is written, ensure sync is not run for update2 until handleSyncResult is complete for update1.
     // flat concatMaps would allow many syncs to run while handleSyncResult was hanging. We can consider such an idea if performance requires it.
     return merge(...this.sources.map(s => s.watch$(sequence$))).pipe(
-      tap(update => console.log('PATCHDB - sources updated:', update)),
+      tap(update => console.log('PATCHDB - source updated:', update)),
       concatMap(update =>
         this.sequenceStore.update$(update).pipe(
           concatMap(res => this.handleSyncResult$(res)),
@@ -109,7 +107,7 @@ export class PatchDB<T extends object> {
 export type PatchDbConfig<T> = {
   http: Http<T>
   sources: Source<T>[]
-  bootstrapper?: Bootstrapper<T>
+  bootstrapper: Bootstrapper<T>
   timeoutForMissingRevision?: number
 }
 
@@ -127,7 +125,6 @@ export interface Http<T> {
 export interface Bootstrapper<T> {
   init (): Promise<DBCache<T>>
   update (cache: DBCache<T>): Promise<void>
-  clear (): Promise<void>
 }
 
 export interface DBCache<T>{
