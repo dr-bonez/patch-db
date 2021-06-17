@@ -220,6 +220,11 @@ impl PatchDb {
     pub async fn dump(&self) -> Dump {
         self.store.read().await.dump()
     }
+    pub async fn dump_and_sub(&self) -> (Dump, Receiver<Arc<Revision>>) {
+        let store = self.store.read().await;
+        let sub = self.subscriber.subscribe();
+        (store.dump(), sub)
+    }
     pub async fn exists<S: AsRef<str>, V: SegList>(
         &self,
         ptr: &JsonPointer<S, V>,
