@@ -189,8 +189,8 @@ impl Store {
             // TODO: try to recover.
         }
 
-        let id = self.revision;
         self.revision += 1;
+        let id = self.revision;
         let res = Arc::new(Revision {
             id,
             patch,
