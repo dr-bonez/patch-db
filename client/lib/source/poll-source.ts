@@ -1,7 +1,6 @@
 import { BehaviorSubject, concat, from, Observable, of } from 'rxjs'
 import { catchError, concatMap, delay, skip, switchMap, take, tap } from 'rxjs/operators'
-import { Http } from '../patch-db'
-import { UpdateReal } from '../sequence-store'
+import { Http, Update } from '../types'
 import { Source } from './source'
 
 export type PollConfig = {
@@ -15,7 +14,7 @@ export class PollSource<T> implements Source<T> {
     private readonly http: Http<T>,
   ) { }
 
-  watch$ (sequence$: Observable<number>): Observable<UpdateReal<T>> {
+  watch$ (sequence$: Observable<number>): Observable<Update<T>> {
     console.log('POLL_SOURCE - watch$()')
 
     const polling$ = new BehaviorSubject('')
