@@ -1,34 +1,40 @@
-import { Observable } from 'rxjs'
+import { BehaviorSubject, Observable } from 'rxjs'
 import { webSocket, WebSocketSubject, WebSocketSubjectConfig } from 'rxjs/webSocket'
-import { Update } from '../types'
+import { ConnectionStatus, Update } from '../types'
 import { Source } from './source'
 
 export class WebsocketSource<T> implements Source<T> {
-  private websocket$: WebSocketSubject<Update<T>>
+  connectionStatus$ = new BehaviorSubject(ConnectionStatus.Initializing)
+  private websocket$: WebSocketSubject<Update<T>> | undefined
 
   constructor (
-    readonly url: string,
+    private readonly url: string,
   ) {
+  }
+
+  watch$ (): Observable<Update<T>> {
     const fullConfig: WebSocketSubjectConfig<Update<T>> = {
-      url,
+      url: this.url,
       openObserver: {
         next: () => {
           console.log('WebSocket connection open')
-          this.websocket$.next('open message' as any)
+          this.connectionStatus$.next(ConnectionStatus.Connected)
+          this.websocket$!.next('open message' as any)
         },
       },
       closeObserver: {
         next: () => {
+          this.connectionStatus$.next(ConnectionStatus.Disconnected)
           console.log('WebSocket connection closed')
-          // @TODO re-open websocket on retry loop
         },
       },
       closingObserver: {
-        next: () => console.log('Websocket subscription cancelled, websocket closing'),
+        next: () => {
+          console.log('Websocket subscription cancelled, websocket closing')
+        },
       },
     }
     this.websocket$ = webSocket(fullConfig)
+    return this.websocket$
   }
-
-  watch$ (): Observable<Update<T>> { return this.websocket$.asObservable() }
 }
