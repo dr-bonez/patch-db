@@ -27,3 +27,9 @@ export interface DBCache<T>{
   sequence: number,
   data: T | { }
 }
+
+export enum ConnectionStatus {
+  Initializing = 'initializing',
+  Connected = 'connected',
+  Disconnected = 'disconnected',
+}

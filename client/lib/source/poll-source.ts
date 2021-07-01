@@ -1,6 +1,6 @@
 import { BehaviorSubject, concat, from, Observable, of } from 'rxjs'
 import { catchError, concatMap, delay, skip, switchMap, take, tap } from 'rxjs/operators'
-import { Http, Update } from '../types'
+import { ConnectionStatus, Http, Update } from '../types'
 import { Source } from './source'
 
 export type PollConfig = {
@@ -8,6 +8,7 @@ export type PollConfig = {
 }
 
 export class PollSource<T> implements Source<T> {
+  connectionStatus$ = new BehaviorSubject(ConnectionStatus.Initializing)
 
   constructor (
     private readonly pollConfig: PollConfig,
@@ -15,26 +16,22 @@ export class PollSource<T> implements Source<T> {
   ) { }
 
   watch$ (sequence$: Observable<number>): Observable<Update<T>> {
-    console.log('POLL_SOURCE - watch$()')
-
     const polling$ = new BehaviorSubject('')
 
     const updates$ = of('').pipe(
       concatMap(_ => sequence$),
       take(1),
-      tap(_ => console.log('making request')),
       concatMap(seq => this.http.getRevisions(seq)),
+      tap(_ => this.connectionStatus$.next(ConnectionStatus.Connected)),
       catchError(e => {
         console.error(e)
+        this.connectionStatus$.next(ConnectionStatus.Disconnected)
         return of([])
       }),
-      tap(_ => console.log('request complete')),
     )
 
     const delay$ = of([]).pipe(
-      tap(_ => console.log('starting cooldown')),
       delay(this.pollConfig.cooldown),
-      tap(_ => console.log('cooldown finished')),
       tap(_ => polling$.next('')),
       skip(1),
     )
