@@ -1,5 +1,5 @@
 import { BehaviorSubject, concat, from, Observable, of } from 'rxjs'
-import { concatMap, delay, map, skip, switchMap, take, tap } from 'rxjs/operators'
+import { concatMap, delay, skip, switchMap, take, tap } from 'rxjs/operators'
 import { Store } from '../store'
 import { Http, Update } from '../types'
 import { Source } from './source'
@@ -16,17 +16,13 @@ export class PollSource<T> implements Source<T> {
   ) { }
 
   watch$ (store: Store<T>): Observable<Update<T>> {
-    const sequence$ = store.watchCache$()
-    .pipe(
-      map(cache => cache.sequence),
-    )
-
     const polling$ = new BehaviorSubject('')
 
-    const updates$ = of('').pipe(
-      concatMap(_ => sequence$),
-      take(1),
+    const updates$ = of({ })
+    .pipe(
+      concatMap(_ => store.sequence$),
       concatMap(seq => this.http.getRevisions(seq)),
+      take(1),
     )
 
     const delay$ = of([]).pipe(
