@@ -25,5 +25,5 @@ export interface Bootstrapper<T> {
 
 export interface DBCache<T>{
   sequence: number,
-  data: T | { }
+  data: T
 }
