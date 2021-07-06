@@ -1,15 +1,20 @@
-import { from, Observable, of } from 'rxjs'
+import { BehaviorSubject, from, Observable } from 'rxjs'
+import { observable } from 'mobx'
 import { toStream } from 'mobx-utils'
 import { DBCache, Dump, Revision, Update } from './types'
 import { applyPatch } from 'fast-json-patch'
 
-export class Store<T extends { }> {
-  cache: DBCache<T>
+export class Store<T> {
+  sequence: number
+  o: { data: T | { } }
+  cache$: BehaviorSubject<DBCache<T>>
 
   constructor (
     readonly initialCache: DBCache<T>,
   ) {
-    this.cache = initialCache
+    this.sequence = initialCache.sequence
+    this.o = observable({ data: this.initialCache.data })
+    this.cache$ = new BehaviorSubject(initialCache)
   }
 
   watch$ (): Observable<T>
@@ -23,33 +28,33 @@ export class Store<T extends { }> {
     return from(toStream(() => this.peekNode(...args), true))
   }
 
-  watchAll$ (): Observable<DBCache<T>> {
-    return of(this.cache)
+  watchCache$ (): Observable<DBCache<T>> {
+    return this.cache$.asObservable()
   }
 
-  update$ (update: Update<T>): Observable<DBCache<T>> {
-    console.log('UPDATE:', update)
+  update (update: Update<T>): void {
     if ((update as Revision).patch) {
-      if (this.cache.sequence + 1 !== update.id) throw new Error(`Outdated sequence: current: ${this.cache.sequence}, new: ${update.id}`)
-      applyPatch(this.cache.data, (update as Revision).patch, true, true)
+      if (this.sequence + 1 !== update.id) throw new Error(`Outdated sequence: current: ${this.sequence}, new: ${update.id}`)
+      applyPatch(this.o.data, (update as Revision).patch, true, true)
     } else {
-      this.cache.data = (update as Dump<T>).value
+      this.o.data = (update as Dump<T>).value
     }
 
-    this.cache.sequence = update.id
-    return of(this.cache)
+    this.sequence = update.id
+
+    this.cache$.next({ sequence: this.sequence, data: this.o.data })
   }
 
   reset (): void {
-    this.cache = {
+    this.cache$.next({
       sequence: 0,
       data: { },
-    }
+    })
   }
 
   private peekNode (...args: (string | number)[]): any {
     try {
-      return args.reduce((acc, next) => (acc as any)[`${next}`], this.cache.data)
+      return args.reduce((acc, next) => (acc as any)[`${next}`], this.o.data)
     } catch (e) {
       return undefined
     }

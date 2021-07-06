@@ -1,7 +1,7 @@
-import { BehaviorSubject, Observable } from 'rxjs'
-import { ConnectionStatus, Update } from '../types'
+import { Observable } from 'rxjs'
+import { Store } from '../store'
+import { Update } from '../types'
 
 export interface Source<T> {
-  connectionStatus$: BehaviorSubject<ConnectionStatus>
-  watch$ (sequence$?: Observable<number>): Observable<Update<T>>
+  watch$ (store?: Store<T>): Observable<Update<T>>
 }
