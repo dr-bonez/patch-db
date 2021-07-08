@@ -29,10 +29,13 @@ pub struct Transaction<Parent: DbHandle> {
 impl Transaction<&mut PatchDbHandle> {
     pub async fn commit(mut self, expire_id: Option<String>) -> Result<Arc<Revision>, Error> {
         let store_lock = self.parent.store();
-        let store = store_lock.read().await;
+        let store = store_lock.write().await;
         self.rebase()?;
-        let rev = self.parent.db.apply(self.updates, expire_id, None).await?;
-        drop(store);
+        let rev = self
+            .parent
+            .db
+            .apply(self.updates, expire_id, Some(store))
+            .await?;
         Ok(rev)
     }
     pub async fn abort(mut self) -> Result<DiffPatch, Error> {
