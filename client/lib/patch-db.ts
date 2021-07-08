@@ -2,7 +2,7 @@ import { merge, Observable, of } from 'rxjs'
 import { concatMap, finalize, tap } from 'rxjs/operators'
 import { Source } from './source/source'
 import { Store } from './store'
-import { DBCache } from './types'
+import { DBCache, Http } from './types'
 
 export { Operation } from 'fast-json-patch'
 
@@ -11,9 +11,10 @@ export class PatchDB<T> {
 
   constructor (
     private readonly sources: Source<T>[],
+    private readonly http: Http<T>,
     private readonly initialCache: DBCache<T>,
   ) {
-    this.store = new Store(this.initialCache)
+    this.store = new Store(this.http, this.initialCache)
   }
 
   sync$ (): Observable<DBCache<T>> {
