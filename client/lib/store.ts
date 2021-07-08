@@ -1,17 +1,20 @@
-import { DBCache, Dump, Revision, Update } from './types'
+import { DBCache, Dump, Http, Revision, Update } from './types'
 import { applyPatch, getValueByPointer } from 'fast-json-patch'
 import { BehaviorSubject, Observable } from 'rxjs'
 import { finalize } from 'rxjs/operators'
+import BTree from 'sorted-btree'
 
 export class Store<T> {
   cache: DBCache<T>
   sequence$: BehaviorSubject<number>
   private nodes: { [path: string]: BehaviorSubject<any> } = { }
+  private stashed = new BTree<number, Revision>()
 
   constructor (
-    readonly initialCache: DBCache<T>,
+    private readonly http: Http<T>,
+    private readonly initialCache: DBCache<T>,
   ) {
-    this.cache = initialCache
+    this.cache = this.initialCache
     this.sequence$ = new BehaviorSubject(initialCache.sequence)
   }
 
@@ -34,22 +37,57 @@ export class Store<T> {
   }
 
   update (update: Update<T>): void {
-    if ((update as Revision).patch) {
-      if (this.cache.sequence + 1 !== update.id) throw new Error(`Outdated sequence: current: ${this.cache.sequence}, new: ${update.id}`)
-      applyPatch(this.cache.data, (update as Revision).patch, true, true);
-      (update as Revision).patch.forEach(op => {
-        this.updateNodesByPath(op.path)
-      })
+    // if stale, return
+    if (update.id <= this.cache.sequence) return
 
+    if (this.isRevision(update)) {
+      this.handleRevision(update)
     } else {
-      this.cache.data = (update as Dump<T>).value
-      this.updateNodesByPath('')
+      this.handleDump(update)
     }
-    this.cache.sequence = update.id
-    this.sequence$.next(this.cache.sequence)
   }
 
-  updateNodesByPath (revisionPath: string) {
+  reset (): void {
+    Object.values(this.nodes).forEach(node => node.complete())
+    this.stashed.clear()
+  }
+
+  private handleRevision (revision: Revision): void {
+    // stash the revision
+    this.stashed.set(revision.id, revision)
+    // if revision is futuristic, fetch missing revisions and return
+    if (revision.id > this.cache.sequence + 1) {
+      this.http.getRevisions(this.cache.sequence)
+      return
+    // if revision is next in line, apply contiguous stashed
+    } else {
+      this.processStashed(revision.id)
+    }
+  }
+
+  private handleDump (dump: Dump<T>): void {
+    this.cache.data = dump.value
+    this.stashed.deleteRange(this.cache.sequence, dump.id, false)
+    this.updateNodesByPath('')
+    this.updateSequence(dump.id)
+    this.processStashed(dump.id + 1)
+  }
+
+  private processStashed (id: number): void {
+    while (true) {
+      const revision = this.stashed.get(id)
+      if (!revision) break
+      applyPatch(this.cache.data, revision.patch, true, true)
+      revision.patch.map(op => {
+        this.updateNodesByPath(op.path)
+      })
+      this.updateSequence(id)
+      id++
+    }
+    this.stashed.deleteRange(0, id, false)
+  }
+
+  private updateNodesByPath (revisionPath: string) {
     Object.keys(this.nodes).forEach(nodePath => {
       if (!this.nodes[nodePath]) return
       if (nodePath.includes(revisionPath) || revisionPath.includes(nodePath)) {
@@ -63,7 +101,12 @@ export class Store<T> {
     })
   }
 
-  reset (): void {
-    Object.values(this.nodes).forEach(node => node.complete())
+  private updateSequence (sequence: number): void {
+    this.cache.sequence = sequence
+    this.sequence$.next(sequence)
+  }
+
+  private isRevision (update: Update<T>): update is Revision {
+    return !!(update as Revision).patch
   }
 }
