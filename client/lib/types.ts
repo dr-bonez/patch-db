@@ -1,4 +1,4 @@
-import { Operation } from 'fast-json-patch'
+import { Operation } from './json-patch-lib'
 
 // revise a collection of nodes.
 export type Revision = { id: number, patch: Operation[], expireId: string | null }

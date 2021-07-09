@@ -1,14 +1,19 @@
 import { DBCache, Dump, Http, Revision, Update } from './types'
-import { applyPatch, getValueByPointer } from 'fast-json-patch'
 import { BehaviorSubject, Observable } from 'rxjs'
 import { finalize } from 'rxjs/operators'
+import { applyOperation, getValueByPointer, Operation } from './json-patch-lib'
 import BTree from 'sorted-btree'
+
+export interface StashEntry {
+  revision: Revision
+  undo: Operation[]
+}
 
 export class Store<T> {
   cache: DBCache<T>
   sequence$: BehaviorSubject<number>
-  private nodes: { [path: string]: BehaviorSubject<any> } = { }
-  private stashed = new BTree<number, Revision>()
+  private watchedNodes: { [path: string]: BehaviorSubject<any> } = { }
+  private stash = new BTree<number, StashEntry>()
 
   constructor (
     private readonly http: Http<T>,
@@ -27,18 +32,18 @@ export class Store<T> {
   watch$<P1 extends keyof T, P2 extends keyof T[P1], P3 extends keyof T[P1][P2], P4 extends keyof T[P1][P2][P3], P5 extends keyof T[P1][P2][P3][P4], P6 extends keyof T[P1][P2][P3][P4][P5]> (p1: P1, p2: P2, p3: P3, p4: P4, p5: P5, p6: P6): Observable<T[P1][P2][P3][P4][P5][P6]>
   watch$ (...args: (string | number)[]): Observable<any> {
     const path = `/${args.join('/')}`
-    if (!this.nodes[path]) {
-      this.nodes[path] = new BehaviorSubject(getValueByPointer(this.cache.data, path))
-      this.nodes[path].pipe(
-        finalize(() => delete this.nodes[path]),
+    if (!this.watchedNodes[path]) {
+      this.watchedNodes[path] = new BehaviorSubject(getValueByPointer(this.cache.data, path))
+      this.watchedNodes[path].pipe(
+        finalize(() => delete this.watchedNodes[path]),
       )
     }
-    return this.nodes[path].asObservable()
+    return this.watchedNodes[path].asObservable()
   }
 
   update (update: Update<T>): void {
-    // if stale, return
-    if (update.id <= this.cache.sequence) return
+    // if old or known, return
+    if (update.id <= this.cache.sequence || this.stash.get(update.id)) return
 
     if (this.isRevision(update)) {
       this.handleRevision(update)
@@ -48,54 +53,94 @@ export class Store<T> {
   }
 
   reset (): void {
-    Object.values(this.nodes).forEach(node => node.complete())
-    this.stashed.clear()
+    Object.values(this.watchedNodes).forEach(node => node.complete())
+    this.stash.clear()
   }
 
   private handleRevision (revision: Revision): void {
     // stash the revision
-    this.stashed.set(revision.id, revision)
-    // if revision is futuristic, fetch missing revisions and return
+    this.stash.set(revision.id, { revision, undo: [] })
+
+    // if revision is futuristic, fetch missing revisions
     if (revision.id > this.cache.sequence + 1) {
       this.http.getRevisions(this.cache.sequence)
-      return
-    // if revision is next in line, apply contiguous stashed
-    } else {
-      this.processStashed(revision.id)
     }
+
+    this.processStashed(revision.id)
   }
 
   private handleDump (dump: Dump<T>): void {
     this.cache.data = dump.value
-    this.stashed.deleteRange(this.cache.sequence, dump.id, false)
-    this.updateNodesByPath('')
+    this.stash.deleteRange(this.cache.sequence, dump.id, false)
+    this.updateWatchedNodes('')
     this.updateSequence(dump.id)
     this.processStashed(dump.id + 1)
   }
 
   private processStashed (id: number): void {
-    while (true) {
-      const revision = this.stashed.get(id)
-      if (!revision) break
-      applyPatch(this.cache.data, revision.patch, true, true)
-      revision.patch.map(op => {
-        this.updateNodesByPath(op.path)
-      })
-      this.updateSequence(id)
-      id++
-    }
-    this.stashed.deleteRange(0, id, false)
+    this.undoRevisions(id)
+    this.applyRevisions(id)
   }
 
-  private updateNodesByPath (revisionPath: string) {
-    Object.keys(this.nodes).forEach(nodePath => {
-      if (!this.nodes[nodePath]) return
-      if (nodePath.includes(revisionPath) || revisionPath.includes(nodePath)) {
-        try {
-          this.nodes[nodePath].next(getValueByPointer(this.cache.data, nodePath))
-        } catch (e) {
-          this.nodes[nodePath].complete()
-          delete this.nodes[nodePath]
+  private undoRevisions (id: number): void {
+    let stashEntry = this.stash.get(this.stash.maxKey() as number)
+
+    while (stashEntry && stashEntry.revision.id > id) {
+      stashEntry.undo.forEach(u => {
+        applyOperation(document, u)
+      })
+      stashEntry = this.stash.nextLowerPair(stashEntry.revision.id)?.[1]
+    }
+  }
+
+  private applyRevisions (id: number): void {
+    let revision = this.stash.get(id)?.revision
+
+    while (revision) {
+      let undo: Operation[] = []
+
+      let success = false
+      try {
+        revision.patch.forEach(op => {
+          const u = applyOperation(this.cache.data, op)
+          if (u) undo.push(u)
+        })
+        success = true
+      } catch (e) {
+        undo.forEach(u => {
+          applyOperation(document, u)
+        })
+        undo = []
+      }
+
+      if (success) {
+        revision.patch.forEach(op => {
+          this.updateWatchedNodes(op.path)
+        })
+      }
+
+      if (revision.id === this.cache.sequence + 1) {
+        this.updateSequence(revision.id)
+      } else {
+        this.stash.set(revision.id, { revision, undo })
+      }
+
+      // increment revision for next loop
+      revision = this.stash.nextHigherPair(revision.id)?.[1].revision
+    }
+
+    // delete all old stashed revisions
+    this.stash.deleteRange(0, this.cache.sequence, false)
+  }
+
+  private updateWatchedNodes (revisionPath: string) {
+    Object.keys(this.watchedNodes).forEach(path => {
+      if (path.includes(revisionPath) || revisionPath.includes(path)) {
+        const val = getValueByPointer(this.cache.data, path)
+        if (val !== undefined) {
+          this.watchedNodes[path].next(val)
+        } else {
+          this.watchedNodes[path].complete()
         }
       }
     })
