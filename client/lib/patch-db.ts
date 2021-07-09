@@ -4,8 +4,6 @@ import { Source } from './source/source'
 import { Store } from './store'
 import { DBCache, Http } from './types'
 
-export { Operation } from 'fast-json-patch'
-
 export class PatchDB<T> {
   store: Store<T>
 
